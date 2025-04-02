@@ -1,4 +1,10 @@
 package site.hnfy258.protocal;
 
-public interface Resp {
+import io.netty.buffer.ByteBuf;
+
+public abstract class Resp {
+
+    public void write(Resp resp, ByteBuf buffer) {
+
+    }
 }
