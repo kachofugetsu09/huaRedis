@@ -41,22 +41,28 @@ public class MyRedisService implements RedisService{
                             ChannelPipeline pipeline = ch.pipeline();
                             // 添加Redis协议解码器
                             pipeline.addLast(new MyDecoder());
-                            // 添加Redis命令处理器
-                            pipeline.addLast(new MyCommandHandler());
                             // 添加Redis响应编码器
                             pipeline.addLast(new MyResponseEncoder());
+                            // 添加Redis命令处理器
+                            pipeline.addLast(new MyCommandHandler());
+
                         }
                     });
 
-            // 绑定端口并启动服务
             ChannelFuture future = serverBootstrap.bind(port).sync();
             System.out.println("Redis服务已启动，监听端口: " + port);
 
-            // 保存Channel以便后续关闭
             this.channel = future.channel();
 
-            // 等待服务器套接字关闭
-             future.channel().closeFuture().sync();
+            future.channel().closeFuture().addListener(f -> {
+                if (f.isSuccess()) {
+                    System.out.println("服务器关闭成功");
+                } else {
+                    System.err.println("服务器关闭异常: " + f.cause());
+                }
+            });
+
+            future.channel().closeFuture().sync();
         } catch (Exception e) {
             e.printStackTrace();
         }

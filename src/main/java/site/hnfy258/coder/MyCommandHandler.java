@@ -3,36 +3,42 @@ package site.hnfy258.coder;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import site.hnfy258.command.Command;
+import site.hnfy258.command.CommandType;
 import site.hnfy258.protocal.*;
-
 public class MyCommandHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        System.out.println("接收到消息类型: " + msg.getClass().getName());
-
         if (msg instanceof RespArray) {
             RespArray command = (RespArray) msg;
             Resp[] array = command.getArray();
 
             if (array.length > 0 && array[0] instanceof BulkString) {
                 String commandName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
-                System.out.println("接收到命令: " + commandName);
 
-                switch (commandName) {
-                    case "PING":
-                        System.out.println("发送PONG响应");
-                        ctx.writeAndFlush(new SimpleString("PONG"));
-                        break;
-                    // 其他待定
-                    default:
-                        System.out.println("未知命令: " + commandName);
-                        ctx.writeAndFlush(new Errors("ERR unknown command '" + commandName + "'"));
+                try {
+                    CommandType commandType = CommandType.valueOf(commandName);
+                    Command cmd = commandType.getSupplier().get();
+                    cmd.setContext(array);
+
+                    Resp response = cmd.handle();
+                    ctx.writeAndFlush(response).addListener(future -> {
+                        if (future.isSuccess()) {
+                            System.out.println("响应发送成功");
+                        } else {
+                            System.err.println("响应发送失败: " + future.cause());
+                        }
+                    });
+                } catch (IllegalArgumentException e) {
+                    System.err.println("未知命令: " + commandName);
+                    ctx.writeAndFlush(new Errors("ERR unknown command '" + commandName + "'"));
                 }
             } else {
-                System.out.println("无效命令格式");
+                System.err.println("无效的命令格式");
+                ctx.writeAndFlush(new Errors("ERR invalid command format"));
             }
         } else {
-            System.out.println("不是RespArray类型");
+            System.err.println("无效的消息类型");
+            ctx.writeAndFlush(new Errors("ERR invalid message type"));
         }
     }
 
