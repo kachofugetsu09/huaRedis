@@ -1,6 +1,8 @@
 package site.hnfy258.protocal;
 
-public class RespInt  extends Resp
+import io.netty.buffer.ByteBuf;
+
+public class RespInt extends Resp
 {
     int value;
 
@@ -12,5 +14,18 @@ public class RespInt  extends Resp
     public int getValue()
     {
         return value;
+    }
+
+    @Override
+    public void write(Resp resp, ByteBuf buffer) {
+        buffer.writeByte((byte) ':');
+        String content   = String.valueOf(((RespInt) resp).getValue());
+        char[] charArray = content.toCharArray();
+        for (char each : charArray)
+        {
+            buffer.writeByte((byte) each);
+        }
+        buffer.writeByte((byte) '\r');
+        buffer.writeByte((byte) '\n');
     }
 }

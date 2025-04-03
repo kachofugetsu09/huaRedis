@@ -7,6 +7,9 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import site.hnfy258.coder.MyCommandHandler;
+import site.hnfy258.coder.MyDecoder;
+import site.hnfy258.coder.MyResponseEncoder;
 
 public class MyRedisService implements RedisService{
     private Channel channel;
@@ -37,11 +40,11 @@ public class MyRedisService implements RedisService{
                         protected void initChannel(SocketChannel ch) throws Exception {
                             ChannelPipeline pipeline = ch.pipeline();
                             // 添加Redis协议解码器
-                            pipeline.addLast(new RedisCommandDecoder());
+                            pipeline.addLast(new MyDecoder());
                             // 添加Redis命令处理器
-                            pipeline.addLast(new RedisCommandHandler());
+                            pipeline.addLast(new MyCommandHandler());
                             // 添加Redis响应编码器
-                            pipeline.addLast(new RedisResponseEncoder());
+                            pipeline.addLast(new MyResponseEncoder());
                         }
                     });
 
@@ -53,7 +56,7 @@ public class MyRedisService implements RedisService{
             this.channel = future.channel();
 
             // 等待服务器套接字关闭
-            // future.channel().closeFuture().sync();
+             future.channel().closeFuture().sync();
         } catch (Exception e) {
             e.printStackTrace();
         }

@@ -1,5 +1,7 @@
 package site.hnfy258.datatype;
 
+import io.netty.buffer.ByteBuf;
+
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -37,4 +39,5 @@ public class BytesWrapper {
     public int hashCode() {
         return Arrays.hashCode(bytes);
     }
+
 }
