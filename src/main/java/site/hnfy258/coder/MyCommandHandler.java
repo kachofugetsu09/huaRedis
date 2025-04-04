@@ -2,10 +2,16 @@ package site.hnfy258.coder;
 
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import site.hnfy258.RedisCore;
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
 import site.hnfy258.protocal.*;
 public class MyCommandHandler extends ChannelInboundHandlerAdapter {
+    private final RedisCore redisCore;
+
+    public MyCommandHandler(RedisCore redisCore) {
+        this.redisCore = redisCore;
+    }
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         if (msg instanceof RespArray) {
@@ -17,7 +23,7 @@ public class MyCommandHandler extends ChannelInboundHandlerAdapter {
 
                 try {
                     CommandType commandType = CommandType.valueOf(commandName);
-                    Command cmd = commandType.getSupplier().get();
+                    Command cmd = commandType.getSupplier().apply(redisCore);
                     cmd.setContext(array);
 
                     Resp response = cmd.handle();

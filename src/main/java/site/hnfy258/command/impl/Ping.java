@@ -14,7 +14,6 @@ public class Ping implements Command {
 
     @Override
     public void setContext(Resp[] array) {
-        // PING command doesn't need any context
     }
 
     @Override

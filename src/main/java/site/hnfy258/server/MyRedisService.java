@@ -7,6 +7,8 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import site.hnfy258.RedisCore;
+import site.hnfy258.RedisCoreImpl;
 import site.hnfy258.coder.MyCommandHandler;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
@@ -16,9 +18,11 @@ public class MyRedisService implements RedisService{
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private int port = 6379;
+    private final RedisCore redisCore;
 
     public MyRedisService(int port) {
         this.port = port;
+        this.redisCore = new RedisCoreImpl();
     }
 
 
@@ -44,7 +48,7 @@ public class MyRedisService implements RedisService{
                             // 添加Redis响应编码器
                             pipeline.addLast(new MyResponseEncoder());
                             // 添加Redis命令处理器
-                            pipeline.addLast(new MyCommandHandler());
+                            pipeline.addLast(new MyCommandHandler(redisCore));
 
                         }
                     });
@@ -87,5 +91,9 @@ public class MyRedisService implements RedisService{
     @Override
     public MyRedisService getRedisService() {
         return this;
+    }
+
+    public RedisCore getRedisCore() {
+        return redisCore;
     }
 }
