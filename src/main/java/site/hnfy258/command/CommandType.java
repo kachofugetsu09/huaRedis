@@ -2,14 +2,18 @@ package site.hnfy258.command;
 
 import java.util.function.Function;
 import site.hnfy258.RedisCore;
-import site.hnfy258.command.impl.Get;
-import site.hnfy258.command.impl.Ping;
-import site.hnfy258.command.impl.Set;
+import site.hnfy258.command.impl.*;
+import site.hnfy258.command.impl.String.*;
 
 public enum CommandType {
     PING(core -> new Ping()),
-    SET(core -> new Set(core)),
-    GET(core -> new Get(core));
+    SET(Set::new),
+    DEL(Del::new),
+    EXIST(Exist::new),
+    EXPIRE(Expire::new),
+    TTL(core ->new Ttl(core)),
+    GET(Get::new);
+
 
     private final Function<RedisCore, Command> supplier;
 

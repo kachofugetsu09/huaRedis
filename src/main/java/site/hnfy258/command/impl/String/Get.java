@@ -1,4 +1,4 @@
-package site.hnfy258.command.impl;
+package site.hnfy258.command.impl.String;
 
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
