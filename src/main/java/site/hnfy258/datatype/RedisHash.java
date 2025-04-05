@@ -4,7 +4,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class RedishHash implements  RedisData{
+public class RedisHash implements  RedisData{
     private volatile long timeout = -1;
     private final  Map<BytesWrapper,BytesWrapper> RedishHashMap = new HashMap<>();
     @Override

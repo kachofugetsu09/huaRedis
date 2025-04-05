@@ -3,6 +3,7 @@ package site.hnfy258.command;
 import java.util.function.Function;
 import site.hnfy258.RedisCore;
 import site.hnfy258.command.impl.*;
+import site.hnfy258.command.impl.Hash.*;
 import site.hnfy258.command.impl.Set.*;
 import site.hnfy258.command.impl.String.*;
 
@@ -19,6 +20,14 @@ public enum CommandType {
     SCARD(Scard::new),
     SREM(Srem::new),
     SPOP(Spop::new),
+    HSET(Hset::new),
+    HGET(Hget::new),
+    HMEST(Hmest::new),
+    HGETALL(Hgetall::new),
+    HMGET(Hmget::new),
+    HDEL(Hdel::new),
+    HEXISTS(Hexists::new),
+    HLEN(Hlen::new),
     GET(Get::new);
 
 
