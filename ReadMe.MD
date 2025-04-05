@@ -36,13 +36,14 @@
     - [x] HEXISTS key field
     - [x] HLEN key
 
-- [ ] 7. RedisList 命令实现
-    - [ ] LPUSH key element [element ...]
-    - [ ] RPUSH key element [element ...]
-    - [ ] LPOP key
-    - [ ] RPOP key
-    - [ ] LLEN key
-    - [ ] LRANGE key start stop
+- [x] 7. RedisList 命令实现
+    - [x] LPUSH key element [element ...]
+    - [x] RPUSH key element [element ...]
+    - [x] LPOP key
+    - [x] RPOP key
+    - [x] LLEN key
+    - [x] LRANGE key start stop
+    - [x] LREM key value
 
 - [ ] 8. RedisZset 命令实现
     - [ ] ZADD key [NX|XX] [CH] [INCR] score member [score member ...]

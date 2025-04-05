@@ -2,6 +2,8 @@ package site.hnfy258.datatype;
 
 import java.util.Deque;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class RedisList implements  RedisData{
     private volatile long timeout;
@@ -13,12 +15,12 @@ public class RedisList implements  RedisData{
     }
     @Override
     public long timeout() {
-        return 0;
+        return timeout;
     }
 
     @Override
     public void setTimeout(long timeout) {
-
+        this.timeout = timeout;
     }
 
     public long getTimeout() {
@@ -46,5 +48,19 @@ public class RedisList implements  RedisData{
 
     public BytesWrapper rpop(){
         return list.pollLast();
+    }
+
+    public List<BytesWrapper> lrange(int start, int end){
+        List<BytesWrapper> res =  list.stream().skip(start)
+                .limit(end-start>=0?end-start+1:0).collect(Collectors.toList());
+        return res;
+    }
+
+    public int remove(BytesWrapper value) {
+        int count = 0;
+        while(list.remove(value)){
+            count++;
+        }
+        return count;
     }
 }

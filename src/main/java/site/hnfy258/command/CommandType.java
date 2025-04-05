@@ -4,6 +4,7 @@ import java.util.function.Function;
 import site.hnfy258.RedisCore;
 import site.hnfy258.command.impl.*;
 import site.hnfy258.command.impl.Hash.*;
+import site.hnfy258.command.impl.List.*;
 import site.hnfy258.command.impl.Set.*;
 import site.hnfy258.command.impl.String.*;
 
@@ -28,6 +29,13 @@ public enum CommandType {
     HDEL(Hdel::new),
     HEXISTS(Hexists::new),
     HLEN(Hlen::new),
+    LPUSH(Lpush::new),
+    RPUSH(Rpush::new),
+    LRANGE(Lrange::new),
+    LLEN(Llen::new),
+    LPOP(Lpop::new),
+    RPOP(Rpop::new),
+    LREM(Lrem::new),
     GET(Get::new);
 
 
