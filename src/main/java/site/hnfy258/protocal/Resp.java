@@ -69,7 +69,7 @@ public abstract class Resp {
         {
             throw new IllegalStateException("没有读取到完整的命令");
         }
-        if (positive == false)
+        if (!positive)
         {
             value = -value;
         }
