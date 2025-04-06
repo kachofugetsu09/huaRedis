@@ -45,11 +45,11 @@
     - [x] LRANGE key start stop
     - [x] LREM key value
 
-- [ ] 8. RedisZset 命令实现
-    - [ ] ZADD key [NX|XX] [CH] [INCR] score member [score member ...]
-    - [ ] ZRANGE key start stop [WITHSCORES]
-    - [ ] ZREVRANGE key start stop [WITHSCORES]
-    - [ ] ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]
-    - [ ] ZREM key member [member ...]
-    - [ ] ZCARD key
-    - [ ] ZSCORE key member
+- [x] 8. RedisZset 命令实现
+    - [x] ZADD key score member [score member ...]
+    - [x] ZRANGE key start stop [WITHSCORES]
+    - [x] ZREVRANGE key start stop [WITHSCORES]
+    - [x] ZRANGEBYSCORE key min max [WITHSCORES]
+    - [x] ZREM key member [member ...]
+    - [x] ZCARD key
+    - [x] ZSCORE key member

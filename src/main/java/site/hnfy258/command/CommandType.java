@@ -7,6 +7,7 @@ import site.hnfy258.command.impl.Hash.*;
 import site.hnfy258.command.impl.List.*;
 import site.hnfy258.command.impl.Set.*;
 import site.hnfy258.command.impl.String.*;
+import site.hnfy258.command.impl.Zset.*;
 
 public enum CommandType {
     PING(core -> new Ping()),
@@ -36,6 +37,13 @@ public enum CommandType {
     LPOP(Lpop::new),
     RPOP(Rpop::new),
     LREM(Lrem::new),
+    ZADD(Zadd::new),
+    ZRANGE(Zrange::new),
+    ZREVRANGE(Zrevrange::new),
+    ZRANGEBYSCORE(Zrangebyscore::new),
+    ZREM(Zrem::new),
+    ZCARD(Zcard::new),
+    ZSCORE(Zscore::new),
     GET(Get::new);
 
 

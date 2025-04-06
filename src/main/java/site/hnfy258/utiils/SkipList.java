@@ -1,5 +1,7 @@
 package site.hnfy258.utiils;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
 
 public class SkipList {
@@ -8,10 +10,17 @@ public class SkipList {
     private Node head;
     private int level;
     private Random random;
+    private int size;
 
-    private static class Node{
-        double score;
-        String member;
+    public int size() {
+        return size;
+    }
+
+
+
+    public static class Node{
+        public double score;
+        public String member;
         Node[] next;
         public Node(double score, String member) {
             this.score = score;
@@ -26,40 +35,40 @@ public class SkipList {
         this.random = new Random();
     }
 
-    public boolean insert(double score,String member){
+    public boolean insert(double score, String member) {
         Node[] update = new Node[MAX_LEVEL];
         Node cur = head;
-        //查找插入位置
-        for(int i=level-1;i>=0;i--){
-            //找到当前层中比score小的节点
-            while (cur.next[i] != null && cur.next[i].score < score
-                    || cur.next[i].score == score && cur.next[i].member.compareTo(member) < 0) {
+        for (int i = level - 1; i >= 0; i--) {
+            while (cur.next[i] != null && (cur.next[i].score < score
+                    || (cur.next[i].score == score && cur.next[i].member.compareTo(member) < 0))) {
                 cur = cur.next[i];
             }
-            //将当前节点赋值给update
             update[i] = cur;
         }
         cur = cur.next[0];
 
-        //判断当前节点是否为空
-        if(cur != null && cur.score == score && cur.member.equals(member)){
-            return false;
+        if (cur != null && cur.member.equals(member)) {
+            // 如果member已存在,更新其score
+            cur.score = score;
+            return false; // 返回false表示这是一个更新操作,而不是新插入
         }
 
         int newLevel = randomLevel();
-        if(newLevel > level){
-            for(int i=level;i<newLevel;i++){
+        if (newLevel > level) {
+            for (int i = level; i < newLevel; i++) {
                 update[i] = head;
             }
             level = newLevel;
         }
-        Node newNode = new Node(score,member);
-        for(int i=0;i<newLevel;i++){
+        Node newNode = new Node(score, member);
+        for (int i = 0; i < newLevel; i++) {
             newNode.next[i] = update[i].next[i];
             update[i].next[i] = newNode;
         }
-        return true;
+        size++;
+        return true; // 返回true表示这是一个新插入操作
     }
+
 
 
 
@@ -92,9 +101,11 @@ public class SkipList {
                 update[i].next[i] = cur.next[i];
             }
 
-            while(level>1&&head.next[level]==null){
+            while(level>1&&head.next[level-1]==null){
                 level--;
             }
+            size--;
+            print();
             return true;
         }
         return false;
@@ -112,6 +123,63 @@ public class SkipList {
             return current.score;
         }
         return null;
+    }
+
+    public boolean containsMember(String member) {
+        Node current = head;
+        for (int i = level - 1; i >= 0; i--) {
+            while (current.next[i] != null && current.next[i].member.compareTo(member) < 0) {
+                current = current.next[i];
+            }
+        }
+        current = current.next[0];
+        return current != null && current.member.equals(member);
+    }
+
+    public List<Node> getRange(int start, int stop) {
+        List<Node> result = new ArrayList<>();
+        Node current = head.next[0];
+        int index = 0;
+
+        // 跳过start之前的元素
+        while (current != null && index < start) {
+            current = current.next[0];
+            index++;
+        }
+
+        // 收集范围内的元素
+        while (current != null && index <= stop) {
+            result.add(current);
+            current = current.next[0];
+            index++;
+        }
+
+        return result;
+    }
+
+    public List<Node> getRangeByScore(int min, int max) {
+        List<Node> result = new ArrayList<>();
+        Node current = head.next[0];
+        while(current!=null&&current.score<=min){
+            current=current.next[0];
+        }
+        while(current!=null&&current.score<=max){
+            result.add(current);
+            current=current.next[0];
+        }
+        return result;
+    }
+
+    public void print() {
+        for (int i = level-1; i >= 0; i--) {
+            Node node = head.next[i];
+            System.out.print("Level " + i + ": ");
+            while (node != null) {
+                System.out.print("(" + node.member + "," + node.score + ") ");
+                node = node.next[i];
+            }
+            System.out.println();
+        }
     }
 
 }
