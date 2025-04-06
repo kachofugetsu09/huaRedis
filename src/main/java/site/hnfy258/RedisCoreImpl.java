@@ -71,4 +71,23 @@ public class RedisCoreImpl implements RedisCore
      {
          map.clear();
      }
+
+     public void broadcastToAllClients(String message) {
+         for (Channel channel : clients.values()) {
+             channel.writeAndFlush(message);
+         }
+     }
+
+     public void disconnectClient(Channel channel) {
+         BytesWrapper clientName = clientNames.remove(channel);
+         if (clientName != null) {
+             clients.remove(clientName);
+         }
+         channel.close();
+     }
+
+     public int getConnectedClientsCount() {
+         return clients.size();
+     }
+
  }

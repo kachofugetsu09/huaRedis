@@ -7,7 +7,7 @@ import java.util.stream.Collectors;
 
 public class RedisList implements  RedisData{
     private volatile long timeout;
-    private final Deque<BytesWrapper> list = new LinkedList<>();
+    private final LinkedList<BytesWrapper> list = new LinkedList<>();
 
 
     public RedisList() {

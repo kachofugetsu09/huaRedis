@@ -4,7 +4,6 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.ServerSocketChannel;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import site.hnfy258.RedisCore;
@@ -13,28 +12,34 @@ import site.hnfy258.coder.MyCommandHandler;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
 
-public class MyRedisService implements RedisService{
-    private Channel channel;
+import site.hnfy258.channel.DefaultChannelSelectStrategy;
+import site.hnfy258.channel.LocalChannelOption;
+
+public class MyRedisService implements RedisService {
+    private Channel serverChannel;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private int port = 6379;
     private final RedisCore redisCore;
+    private final DefaultChannelSelectStrategy channelStrategy;
 
     public MyRedisService(int port) {
         this.port = port;
         this.redisCore = new RedisCoreImpl();
+        this.channelStrategy = new DefaultChannelSelectStrategy();
     }
-
 
     @Override
     public void start() {
-        bossGroup = new NioEventLoopGroup(1); // 接受连接的线程组
-        workerGroup = new NioEventLoopGroup(); // 处理IO的线程组
+        LocalChannelOption channelOption = channelStrategy.select();
+
+        bossGroup = channelOption.boss();
+        workerGroup = channelOption.selectors();
 
         try {
             ServerBootstrap serverBootstrap = new ServerBootstrap();
             serverBootstrap.group(bossGroup, workerGroup)
-                    .channel(NioServerSocketChannel.class)
+                    .channel(channelOption.getChannelClass())
                     .option(ChannelOption.SO_BACKLOG, 1024)
                     .option(ChannelOption.SO_REUSEADDR, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
@@ -43,20 +48,16 @@ public class MyRedisService implements RedisService{
                         @Override
                         protected void initChannel(SocketChannel ch) throws Exception {
                             ChannelPipeline pipeline = ch.pipeline();
-                            // 添加Redis协议解码器
                             pipeline.addLast(new MyDecoder());
-                            // 添加Redis响应编码器
                             pipeline.addLast(new MyResponseEncoder());
-                            // 添加Redis命令处理器
                             pipeline.addLast(new MyCommandHandler(redisCore));
-
                         }
                     });
 
             ChannelFuture future = serverBootstrap.bind(port).sync();
             System.out.println("Redis服务已启动，监听端口: " + port);
 
-            this.channel = future.channel();
+            this.serverChannel = future.channel();
 
             future.channel().closeFuture().addListener(f -> {
                 if (f.isSuccess()) {
@@ -75,9 +76,6 @@ public class MyRedisService implements RedisService{
 
     @Override
     public void close() {
-        if (channel != null) {
-            channel.close();
-        }
         if (bossGroup != null) {
             bossGroup.shutdownGracefully();
         }

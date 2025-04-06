@@ -37,20 +37,32 @@ public class Sadd implements Command {
 
     @Override
     public Resp handle() {
-        RedisData redisData = redisCore.get(key);
-        if(redisData == null){
-            RedisSet redisSet = new RedisSet();
-            int sadd = redisSet.sadd(members);
-            redisCore.put(key, redisSet);
-            return new RespInt(sadd);
-        }
-        else if(redisData instanceof RedisSet){
-            RedisSet redisSet = (RedisSet) redisData;
-            int sadd = redisSet.sadd(members);
-            return new RespInt(sadd);
-        }
-        else{
-            return new Errors("WRONGTYPE Operation against a key holding the wrong kind of value");
+        try {
+            System.out.println("Handling SADD command for key: " + key);
+            RedisData redisData = redisCore.get(key);
+            if(redisData == null){
+                System.out.println("Creating new RedisSet for key: " + key);
+                RedisSet redisSet = new RedisSet();
+                int sadd = redisSet.sadd(members);
+                redisCore.put(key, redisSet);
+                System.out.println("Added " + sadd + " members to new set");
+                return new RespInt(sadd);
+            }
+            else if(redisData instanceof RedisSet){
+                System.out.println("Adding to existing RedisSet for key: " + key);
+                RedisSet redisSet = (RedisSet) redisData;
+                int sadd = redisSet.sadd(members);
+                System.out.println("Added " + sadd + " members to existing set");
+                return new RespInt(sadd);
+            }
+            else{
+                System.out.println("Wrong type for key: " + key);
+                return new Errors("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+        } catch (Exception e) {
+            System.err.println("Error handling SADD command: " + e.getMessage());
+            e.printStackTrace();
+            return new Errors("ERR " + e.getMessage());
         }
     }
 }

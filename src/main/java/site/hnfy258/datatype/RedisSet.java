@@ -1,10 +1,11 @@
 package site.hnfy258.datatype;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 public class RedisSet implements  RedisData{
     private volatile long timeout = -1;
-    private final Set<BytesWrapper> redisSet = new HashSet<>();
+    private final Set<BytesWrapper> redisSet = new ConcurrentSkipListSet<>();
     @Override
     public long timeout() {
         return timeout;
@@ -16,7 +17,10 @@ public class RedisSet implements  RedisData{
     }
 
     public int sadd(List<BytesWrapper> members){
-        return (int)members.stream().filter(redisSet::add).count();
+        System.out.println("Adding members to set: " + members);
+        int addedCount = (int)members.stream().filter(redisSet::add).count();
+        System.out.println("Added " + addedCount + " members to set");
+        return addedCount;
     }
 
     public int srem(List<BytesWrapper> members){

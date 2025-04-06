@@ -6,7 +6,7 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
-public class BytesWrapper {
+public class BytesWrapper  implements Comparable<BytesWrapper>{
     static final Charset CHARSET = StandardCharsets.UTF_8;
     private final byte[] bytes;
 
@@ -40,4 +40,15 @@ public class BytesWrapper {
         return Arrays.hashCode(bytes);
     }
 
-}
+    @Override
+    public int compareTo(BytesWrapper o) {
+        int minLength = Math.min(bytes.length, o.bytes.length);
+        for (int i = 0; i < minLength; i++) {
+            int cmp = Byte.compare(bytes[i], o.bytes[i]);
+            if (cmp != 0) {
+                return cmp;
+            }
+        }
+        return bytes.length - o.bytes.length;
+    }
+    }
