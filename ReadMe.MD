@@ -4,21 +4,23 @@
 
 ### 基础功能
 
-- [x] 1. Resp 协议
+- [x] 1.Resp 协议
 
-- [x] 2. Netty 建立连接
+- [x] 2.Netty 建立连接
 
-- [x] 3. 数据结构实现
+- [x] 3.数据结构实现
 
-- [x] 4. RedisString 命令实现
+- [x] 4.RedisString 命令实现
     - [x] SET key value [EX seconds] [PX milliseconds] [NX|XX]
     - [x] GET key
     - [x] DEL key
     - [x] EXISTS key
     - [x] EXPIRE key seconds
     - [x] TTL key
+    - [x] INCR key
+    - [x] MSET key value [key value ...]
 
-- [x] 5. RedisSet 命令实现
+- [x] 5.RedisSet 命令实现
     - [x] SADD key member [member ...]
     - [x] SMEMBERS key
     - [x] SISMEMBER key member
@@ -26,7 +28,7 @@
     - [x] SREM key member [member ...]
     - [x] SPOP key [count]
 
-- [x] 6. RedisHash 命令实现
+- [x] 6.RedisHash 命令实现
     - [x] HSET key field value [field value ...]
     - [x] HGET key field
     - [x] HMSET key field value [field value ...]
@@ -36,7 +38,7 @@
     - [x] HEXISTS key field
     - [x] HLEN key
 
-- [x] 7. RedisList 命令实现
+- [x] 7.RedisList 命令实现
     - [x] LPUSH key element [element ...]
     - [x] RPUSH key element [element ...]
     - [x] LPOP key
@@ -45,7 +47,7 @@
     - [x] LRANGE key start stop
     - [x] LREM key value
 
-- [x] 8. RedisZset 命令实现
+- [x] 8.RedisZset 命令实现
     - [x] ZADD key score member [score member ...]
     - [x] ZRANGE key start stop [WITHSCORES]
     - [x] ZREVRANGE key start stop [WITHSCORES]
@@ -53,3 +55,7 @@
     - [x] ZREM key member [member ...]
     - [x] ZCARD key
     - [x] ZSCORE key member
+
+- [x] 实现了对压测的实现
+ 性能大概有原版的70%。一开始尝试用数组作为hashslot配合crc16，结果发现性能远不如ConcurrentHashMap，最后就commit了一个版本，之后的版本为了性能提升还是换回了ConcurrentHashMap
+
