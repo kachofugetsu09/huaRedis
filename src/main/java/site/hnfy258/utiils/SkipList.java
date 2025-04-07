@@ -1,5 +1,7 @@
 package site.hnfy258.utiils;
 
+import org.apache.log4j.Logger;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -11,6 +13,8 @@ public class SkipList {
     private int level;
     private Random random;
     private int size;
+
+    Logger logger = Logger.getLogger(SkipList.class);
 
     public int size() {
         return size;

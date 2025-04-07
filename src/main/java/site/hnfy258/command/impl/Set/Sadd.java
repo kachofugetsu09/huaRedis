@@ -1,5 +1,6 @@
 package site.hnfy258.command.impl.Set;
 
+import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
@@ -19,6 +20,8 @@ public class Sadd implements Command {
     private BytesWrapper key;
     private List<BytesWrapper> members;
     RedisCore redisCore;
+    
+    Logger logger =  Logger.getLogger(Sadd.class);
 
     public Sadd(RedisCore core){
         this.redisCore = core;
@@ -38,30 +41,29 @@ public class Sadd implements Command {
     @Override
     public Resp handle() {
         try {
-            System.out.println("Handling SADD command for key: " + key);
+            logger.info("Handling SADD command for key: " + key);
             RedisData redisData = redisCore.get(key);
             if(redisData == null){
-                System.out.println("Creating new RedisSet for key: " + key);
+                logger.info("Creating new RedisSet for key: " + key);
                 RedisSet redisSet = new RedisSet();
                 int sadd = redisSet.sadd(members);
                 redisCore.put(key, redisSet);
-                System.out.println("Added " + sadd + " members to new set");
+                logger.info("Added " + sadd + " members to new set");
                 return new RespInt(sadd);
             }
             else if(redisData instanceof RedisSet){
-                System.out.println("Adding to existing RedisSet for key: " + key);
+                logger.info("Adding to existing RedisSet for key: " + key);
                 RedisSet redisSet = (RedisSet) redisData;
                 int sadd = redisSet.sadd(members);
-                System.out.println("Added " + sadd + " members to existing set");
+                logger.info("Added " + sadd + " members to existing set");
                 return new RespInt(sadd);
             }
             else{
-                System.out.println("Wrong type for key: " + key);
+                logger.info("Wrong type for key: " + key);
                 return new Errors("WRONGTYPE Operation against a key holding the wrong kind of value");
             }
         } catch (Exception e) {
-            System.err.println("Error handling SADD command: " + e.getMessage());
-            e.printStackTrace();
+            logger.error("Error handling SADD command: " + e.getMessage());
             return new Errors("ERR " + e.getMessage());
         }
     }

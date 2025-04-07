@@ -3,6 +3,7 @@ package site.hnfy258.server;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
 import io.netty.channel.socket.SocketChannel;
+import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.RedisCoreImpl;
 import site.hnfy258.coder.MyCommandHandler;
@@ -17,6 +18,7 @@ public class MyRedisService implements RedisService {
     private int port = 6379;
     private final RedisCore redisCore;
     private final DefaultChannelSelectStrategy channelStrategy;
+    Logger logger = Logger.getLogger(MyRedisService.class);
 
     public MyRedisService(int port) {
         this.port = port;
@@ -49,23 +51,23 @@ public class MyRedisService implements RedisService {
                         }
                     });
 
-            System.out.println("启动Redis服务，使用单线程模式...");
+            logger.info("启动Redis服务，使用单线程模式...");
             ChannelFuture future = serverBootstrap.bind(port).sync();
-            System.out.println("Redis服务已启动，监听端口: " + port);
+            logger.info("Redis服务已启动，监听端口: " + port);
 
             this.serverChannel = future.channel();
 
             future.channel().closeFuture().addListener(f -> {
                 if (f.isSuccess()) {
-                    System.out.println("服务器关闭成功");
+                    logger.info("服务器关闭成功");
                 } else {
-                    System.err.println("服务器关闭异常: " + f.cause());
+                    logger.error("服务器关闭异常: " + f.cause());
                 }
             });
 
             future.channel().closeFuture().sync();
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("服务器启动异常: " + e.getMessage());
         }
     }
 
@@ -74,7 +76,7 @@ public class MyRedisService implements RedisService {
         if (eventLoop != null) {
             eventLoop.shutdownGracefully();
         }
-        System.out.println("Redis服务已关闭");
+        logger.info("Redis服务已关闭");
     }
 
     @Override

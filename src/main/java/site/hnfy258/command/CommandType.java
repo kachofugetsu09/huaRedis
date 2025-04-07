@@ -13,6 +13,8 @@ public enum CommandType {
     PING(core -> new Ping()),
     SET(Set::new),
     DEL(Del::new),
+    INCR(Incr::new),
+    MSET(Mset::new),
     EXIST(Exist::new),
     EXPIRE(Expire::new),
     SADD(Sadd::new),

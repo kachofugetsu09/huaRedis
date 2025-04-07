@@ -1,11 +1,14 @@
 package site.hnfy258.datatype;
 
+import org.apache.log4j.Logger;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListSet;
 
 public class RedisSet implements  RedisData{
     private volatile long timeout = -1;
     private final Set<BytesWrapper> redisSet = new ConcurrentSkipListSet<>();
+    Logger logger = Logger.getLogger(RedisSet.class);
     @Override
     public long timeout() {
         return timeout;
@@ -17,9 +20,9 @@ public class RedisSet implements  RedisData{
     }
 
     public int sadd(List<BytesWrapper> members){
-        System.out.println("Adding members to set: " + members);
+        logger.info("Adding members to set: " + members);
         int addedCount = (int)members.stream().filter(redisSet::add).count();
-        System.out.println("Added " + addedCount + " members to set");
+        logger.info("Added " + addedCount + " members to set");
         return addedCount;
     }
 
