@@ -11,6 +11,7 @@ import site.hnfy258.command.impl.Zset.*;
 
 public enum CommandType {
     PING(core -> new Ping()),
+    INFO(Info::new),
     SET(Set::new),
     DEL(Del::new),
     INCR(Incr::new),

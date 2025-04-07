@@ -10,9 +10,10 @@ import site.hnfy258.command.CommandType;
 import site.hnfy258.protocal.*;
 import site.hnfy258.datatype.BytesWrapper;
 
+
 public class MyCommandHandler extends ChannelInboundHandlerAdapter {
-    Logger logger = Logger.getLogger(MyCommandHandler.class);
     private final RedisCoreImpl redisCore;
+    Logger logger = Logger.getLogger(MyCommandHandler.class);
 
     public MyCommandHandler(RedisCore redisCore) {
         this.redisCore = (RedisCoreImpl) redisCore;
@@ -20,7 +21,11 @@ public class MyCommandHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof RespArray) {
+        if (msg instanceof SimpleString) {
+            // 处理 SimpleString 类型的消息
+            ctx.writeAndFlush(msg);
+        }
+        else if (msg instanceof RespArray) {
             RespArray command = (RespArray) msg;
             Resp[] array = command.getArray();
 
@@ -37,26 +42,26 @@ public class MyCommandHandler extends ChannelInboundHandlerAdapter {
                         if (future.isSuccess()) {
                             logger.info("响应发送成功");
                         } else {
-                            logger.error("响应发送失败: " + future.cause().getMessage());
+                            logger.error("响应发送失败: " + future.cause());
                         }
                     });
                 } catch (IllegalArgumentException e) {
-                    logger.error("无效的命令格式: " + e.getMessage());
+                    logger.error("未知命令: " + commandName);
                     ctx.writeAndFlush(new Errors("ERR unknown command '" + commandName + "'"));
                 }
             } else {
-                logger.info("无效的命令格式");
+                logger.error("无效的命令格式");
                 ctx.writeAndFlush(new Errors("ERR invalid command format"));
             }
         } else {
-            logger.info("无效的命令格式");
+            logger.error("无效的消息类型");
             ctx.writeAndFlush(new Errors("ERR invalid message type"));
         }
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("捕获到异常: " + cause.getMessage());
+        logger.error("异常捕获: " + cause.getMessage());
         ctx.close();
     }
 

@@ -1,5 +1,6 @@
 package site.hnfy258.command.impl.List;
 
+import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
@@ -18,6 +19,8 @@ public class Lpush implements Command {
     private BytesWrapper key;
     private List<BytesWrapper> element;
     private RedisCore redisCore;
+
+    Logger logger = Logger.getLogger(Lpush.class);
 
     public Lpush(RedisCore redisCore) {
         this.redisCore = redisCore;
@@ -58,7 +61,7 @@ public class Lpush implements Command {
         redisCore.put(key, list);
 
         int size = list.size();
-        System.out.println("LPUSH: " + size);
+        logger.info("LPUSH: " + size);
         return new BulkString(new BytesWrapper(String.valueOf(size).getBytes()));
     }
 }
