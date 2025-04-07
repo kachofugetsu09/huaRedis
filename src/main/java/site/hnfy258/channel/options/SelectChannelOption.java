@@ -5,45 +5,25 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import site.hnfy258.channel.LocalChannelOption;
 
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
-
 public class SelectChannelOption implements LocalChannelOption {
-    private final NioEventLoopGroup boss;
-    private final NioEventLoopGroup selectors;
+    private final NioEventLoopGroup singleEventLoop;
 
-    public SelectChannelOption(NioEventLoopGroup boss, NioEventLoopGroup selectors) {
-        this.boss = boss;
-        this.selectors = selectors;
-    }
-    public SelectChannelOption()
-    {
-        this.boss = new NioEventLoopGroup(4, new ThreadFactory() {
-            private AtomicInteger index = new AtomicInteger(0);
-
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r, "Server_boss_" + index.getAndIncrement());
-            }
-        });
-
-        this.selectors = new NioEventLoopGroup(8, new ThreadFactory() {
-            private AtomicInteger index = new AtomicInteger(0);
-
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r, "Server_selector_" + index.getAndIncrement());
-            }
+    public SelectChannelOption() {
+        this.singleEventLoop = new NioEventLoopGroup(1, r -> {
+            Thread t = new Thread(r, "Redis-EventLoop");
+            t.setDaemon(false);
+            return t;
         });
     }
+
     @Override
     public EventLoopGroup boss() {
-        return  this.boss;
+        return this.singleEventLoop;
     }
 
     @Override
     public EventLoopGroup selectors() {
-        return  this.selectors;
+        return this.singleEventLoop;
     }
 
     @Override
@@ -51,4 +31,3 @@ public class SelectChannelOption implements LocalChannelOption {
         return NioServerSocketChannel.class;
     }
 }
-

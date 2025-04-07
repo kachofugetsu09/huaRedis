@@ -5,45 +5,25 @@ import io.netty.channel.kqueue.KQueueEventLoopGroup;
 import io.netty.channel.kqueue.KQueueServerSocketChannel;
 import site.hnfy258.channel.LocalChannelOption;
 
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
-
 public class KqueueChannelOption implements LocalChannelOption {
-    private final KQueueEventLoopGroup boss;
-    private final KQueueEventLoopGroup selectors;
+    private final KQueueEventLoopGroup singleEventLoop;
 
-    public KqueueChannelOption(KQueueEventLoopGroup boss, KQueueEventLoopGroup selectors) {
-        this.boss = boss;
-        this.selectors = selectors;
-    }
-    public KqueueChannelOption()
-    {
-        this.boss = new KQueueEventLoopGroup(4, new ThreadFactory() {
-            private AtomicInteger index = new AtomicInteger(0);
-
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r, "Server_boss_" + index.getAndIncrement());
-            }
-        });
-
-        this.selectors = new KQueueEventLoopGroup(8, new ThreadFactory() {
-            private AtomicInteger index = new AtomicInteger(0);
-
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r, "Server_selector_" + index.getAndIncrement());
-            }
+    public KqueueChannelOption() {
+        this.singleEventLoop = new KQueueEventLoopGroup(1, r -> {
+            Thread t = new Thread(r, "Redis-EventLoop");
+            t.setDaemon(false);
+            return t;
         });
     }
+
     @Override
     public EventLoopGroup boss() {
-        return this.boss;
+        return this.singleEventLoop;
     }
 
     @Override
     public EventLoopGroup selectors() {
-        return  this.selectors;
+        return this.singleEventLoop;
     }
 
     @Override

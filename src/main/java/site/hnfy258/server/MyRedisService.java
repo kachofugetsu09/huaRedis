@@ -1,24 +1,19 @@
 package site.hnfy258.server;
 
-import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import site.hnfy258.RedisCore;
 import site.hnfy258.RedisCoreImpl;
 import site.hnfy258.coder.MyCommandHandler;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
-
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
 
 public class MyRedisService implements RedisService {
     private Channel serverChannel;
-    private EventLoopGroup bossGroup;
-    private EventLoopGroup workerGroup;
+    private EventLoopGroup eventLoop; // 单个事件循环组
     private int port = 6379;
     private final RedisCore redisCore;
     private final DefaultChannelSelectStrategy channelStrategy;
@@ -33,12 +28,12 @@ public class MyRedisService implements RedisService {
     public void start() {
         LocalChannelOption channelOption = channelStrategy.select();
 
-        bossGroup = channelOption.boss();
-        workerGroup = channelOption.selectors();
+        // 使用同一个事件循环组
+        this.eventLoop = channelOption.boss();
 
         try {
             ServerBootstrap serverBootstrap = new ServerBootstrap();
-            serverBootstrap.group(bossGroup, workerGroup)
+            serverBootstrap.group(eventLoop, eventLoop) // 使用同一个事件循环组
                     .channel(channelOption.getChannelClass())
                     .option(ChannelOption.SO_BACKLOG, 1024)
                     .option(ChannelOption.SO_REUSEADDR, true)
@@ -54,6 +49,7 @@ public class MyRedisService implements RedisService {
                         }
                     });
 
+            System.out.println("启动Redis服务，使用单线程模式...");
             ChannelFuture future = serverBootstrap.bind(port).sync();
             System.out.println("Redis服务已启动，监听端口: " + port);
 
@@ -73,18 +69,13 @@ public class MyRedisService implements RedisService {
         }
     }
 
-
     @Override
     public void close() {
-        if (bossGroup != null) {
-            bossGroup.shutdownGracefully();
-        }
-        if (workerGroup != null) {
-            workerGroup.shutdownGracefully();
+        if (eventLoop != null) {
+            eventLoop.shutdownGracefully();
         }
         System.out.println("Redis服务已关闭");
     }
-
 
     @Override
     public MyRedisService getRedisService() {

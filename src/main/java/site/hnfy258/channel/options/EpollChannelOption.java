@@ -6,43 +6,26 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
 import site.hnfy258.channel.LocalChannelOption;
 
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class EpollChannelOption implements LocalChannelOption {
-    private final EpollEventLoopGroup boss;
-    private final EpollEventLoopGroup selectors;
+    private final EpollEventLoopGroup singleEventLoop;
 
-
-    public EpollChannelOption(EpollEventLoopGroup boss, EpollEventLoopGroup selectors) {
-        this.boss = boss;
-        this.selectors = selectors;
-    }
-
-    public EpollChannelOption(){
-        this.boss = new EpollEventLoopGroup(4, new ThreadFactory() {
-            private AtomicInteger index = new AtomicInteger(0);
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r,"Server_boss_"+index.getAndIncrement());
-            }
-        });
-
-        this.selectors = new EpollEventLoopGroup(8, new ThreadFactory() {
-            private AtomicInteger index = new AtomicInteger(0);
-            @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r,"Server_selector_"+index.getAndIncrement());
-            }
+    public EpollChannelOption() {
+        this.singleEventLoop = new EpollEventLoopGroup(1, r -> {
+            Thread t = new Thread(r, "Redis-EventLoop");
+            t.setDaemon(false);
+            return t;
         });
     }
+
     @Override
     public EventLoopGroup boss() {
-        return this.boss;
+        return this.singleEventLoop;
     }
 
     @Override
     public EventLoopGroup selectors() {
-        return this.selectors;
+        return this.singleEventLoop; // 使用同一个事件循环组
     }
 
     @Override

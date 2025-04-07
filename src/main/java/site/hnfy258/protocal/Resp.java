@@ -7,43 +7,49 @@ public abstract class Resp {
 
     public abstract void write(Resp resp, ByteBuf buffer);
 
-    public static Resp decode(ByteBuf buffer){
+    public static Resp decode(ByteBuf buffer) {
+        if (buffer.readableBytes() <= 0) {
+            throw new IllegalStateException("没有读取到完整的命令");
+        }
         char c = (char) buffer.readByte();
-        switch (c){
-            case '+': return new SimpleString(getString(buffer));
-            case '-': return new Errors(getString(buffer));
-            case ':': return new RespInt(getNumber(buffer));
+        switch (c) {
+            case '+':
+                return new SimpleString(getString(buffer));
+            case '-':
+                return new Errors(getString(buffer));
+            case ':':
+                return new RespInt(getNumber(buffer));
             case '$': {
                 int length = getNumber(buffer);
-                if(buffer.readableBytes()<length+2){
+                if (buffer.readableBytes() < length + 2) {
                     throw new IllegalStateException("没有读取到完整的命令");
                 }
                 byte[] content;
-                if(length==-1){
+                if (length == -1) {
                     content = null;
-                }
-                else
-                {
+                } else {
                     content = new byte[length];
                     buffer.readBytes(content);
                 }
-                if (buffer.readByte() != '\r' || buffer.readByte() != '\n')
-                {
+                if (buffer.readByte() != '\r' || buffer.readByte() != '\n') {
                     throw new IllegalStateException("没有读取到完整的命令");
                 }
                 return new BulkString(new BytesWrapper(content));
             }
-            case '*':{
+            case '*': {
                 int number = getNumber(buffer);
                 Resp[] array = new Resp[number];
-                for (int i = 0; i < number; i++)
-                {
+                for (int i = 0; i < number; i++) {
                     array[i] = decode(buffer);
                 }
                 return new RespArray(array);
             }
             default:
-                throw new IllegalStateException("没有读取到完整的命令");
+                if (c >= 'A' && c <= 'Z') {
+                    return new SimpleString(c + getString(buffer));
+                } else {
+                    throw new IllegalArgumentException("未知的响应类型: " + c);
+                }
         }
     }
 
