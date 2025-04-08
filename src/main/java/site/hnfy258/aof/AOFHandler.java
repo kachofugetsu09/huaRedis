@@ -3,12 +3,18 @@ package site.hnfy258.aof;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.apache.log4j.Logger;
+import site.hnfy258.RedisCore;
+import site.hnfy258.command.Command;
+import site.hnfy258.command.CommandType;
+import site.hnfy258.protocal.BulkString;
 import site.hnfy258.protocal.Resp;
+import site.hnfy258.protocal.RespArray;
 
-import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.*;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,10 +27,12 @@ public class AOFHandler {
     private final LinkedBlockingQueue<Resp> commandQueue;
     private final AtomicBoolean running;
     private Thread bgSaveThread;
-    private long currentPosition;
+    private Thread syncThread;
 
     private static final int BUFFER_SIZE = 2 * 1024 * 1024; // 2MB buffer
-    private ByteBuffer buffer;
+    private ByteBuffer currentBuffer;
+    private ByteBuffer flushingBuffer;
+    private CommandType commandType;
 
     // AOF同步策略
     public enum AOFSyncStrategy {
@@ -40,20 +48,26 @@ public class AOFHandler {
         this.filename = filename;
         this.commandQueue = new LinkedBlockingQueue<>();
         this.running = new AtomicBoolean(true);
-        this.currentPosition = 0;
-        this.buffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+        this.currentBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+        this.flushingBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
     }
 
     public void start() throws IOException {
         this.raf = new RandomAccessFile(filename, "rw");
         this.fileChannel = raf.getChannel();
-        this.currentPosition = raf.length();
-        raf.seek(currentPosition);
+        raf.seek(raf.length());
 
         this.bgSaveThread = new Thread(this::backgroundSave);
         this.bgSaveThread.setName("aof-background-save");
-        this.bgSaveThread.setDaemon(true); // 设置为守护线程，这样主程序退出时不会阻塞
+        this.bgSaveThread.setDaemon(true);
         this.bgSaveThread.start();
+
+        if (syncStrategy == AOFSyncStrategy.EVERYSEC) {
+            this.syncThread = new Thread(this::backgroundSync);
+            this.syncThread.setName("aof-background-sync");
+            this.syncThread.setDaemon(true);
+            this.syncThread.start();
+        }
     }
 
     public void append(Resp command) {
@@ -71,39 +85,21 @@ public class AOFHandler {
                     command.write(command, buf);
                     int size = buf.readableBytes();
 
-                    if (buffer.remaining() < size) {
-                        flushBuffer();
+                    if (currentBuffer.remaining() < size) {
+                        swapBuffers();
                     }
 
-                    buffer.put(buf.nioBuffer());
+                    currentBuffer.put(buf.nioBuffer());
 
                     if (syncStrategy == AOFSyncStrategy.ALWAYS) {
-                        flushBuffer();
-                    } else if (syncStrategy == AOFSyncStrategy.EVERYSEC) {
-                        long now = System.currentTimeMillis();
-                        if (now - lastSyncTime >= 1000) {
-                            flushBuffer();
-                            lastSyncTime = now;
-                        }
-                    }
-                } else {
-                    // 如果队列为空，也要检查是否需要同步
-                    if (syncStrategy == AOFSyncStrategy.EVERYSEC) {
-                        long now = System.currentTimeMillis();
-                        if (now - lastSyncTime >= 1000 && buffer.position() > 0) {
-                            flushBuffer();
-                            lastSyncTime = now;
-                        }
+                        swapBuffers();
                     }
                 }
             } catch (InterruptedException e) {
-                // 线程被中断，可能是服务正在关闭
-                //logger.info("AOF background save thread interrupted, preparing to exit");
-                Thread.currentThread().interrupt(); // 重新设置中断标志
-                break; // 退出循环
+                Thread.currentThread().interrupt();
+                break;
             } catch (IOException e) {
                 logger.error("Error writing to AOF file", e);
-                // 如果发生IO错误，我们可能需要停止AOF
                 if (running.get()) {
                     logger.error("Disabling AOF due to I/O error");
                     running.set(false);
@@ -111,26 +107,44 @@ public class AOFHandler {
             }
         }
 
-        // 确保在退出前刷新所有数据
         try {
-            if (buffer != null && buffer.position() > 0) {
-                flushBuffer();
-                //logger.info("Final AOF buffer flush completed");
-            }
+            swapBuffers();
+            flushBuffer();
         } catch (IOException e) {
             logger.error("Error during final AOF flush", e);
         }
     }
 
+    private void backgroundSync() {
+        while (running.get()) {
+            try {
+                Thread.sleep(1000);
+                swapBuffers();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (IOException e) {
+                logger.error("Error during AOF sync", e);
+            }
+        }
+    }
+
+    private synchronized void swapBuffers() throws IOException {
+        ByteBuffer temp = currentBuffer;
+        currentBuffer = flushingBuffer;
+        flushingBuffer = temp;
+
+        flushingBuffer.flip();
+        flushBuffer();
+        flushingBuffer.clear();
+    }
+
     private void flushBuffer() throws IOException {
-        if (fileChannel != null && fileChannel.isOpen() && buffer.position() > 0) {
-            buffer.flip();
-            fileChannel.write(buffer);
-            buffer.clear();
+        if (fileChannel != null && fileChannel.isOpen() && flushingBuffer.hasRemaining()) {
+            fileChannel.write(flushingBuffer);
             if (syncStrategy != AOFSyncStrategy.NO) {
                 fileChannel.force(false);
             }
-            currentPosition = fileChannel.position();
         }
     }
 
@@ -180,5 +194,90 @@ public class AOFHandler {
 
     public void setSyncStrategy(AOFSyncStrategy strategy) {
         this.syncStrategy = strategy;
+    }
+
+    public void load(RedisCore redisCore) throws IOException {
+        logger.info("开始加载AOF文件: " + filename);
+
+        File file = new File(filename);
+        if (!file.exists() || file.length() == 0) {
+            logger.info("AOF文件不存在或为空，跳过加载");
+            return;
+        }
+
+        try (FileChannel channel = new RandomAccessFile(filename, "r").getChannel()) {
+            ByteBuffer buffer = ByteBuffer.allocate(8192); // 8KB buffer
+            ByteBuf byteBuf = Unpooled.buffer();
+
+            int commandsLoaded = 0;
+            int commandsFailed = 0;
+
+            while (channel.read(buffer) != -1) {
+                buffer.flip();
+                byteBuf.writeBytes(buffer);
+                buffer.clear();
+
+                try {
+                    while (byteBuf.isReadable()) {
+                        // 标记当前位置，以便在命令不完整时回退
+                        byteBuf.markReaderIndex();
+
+                        try {
+                            Resp command = Resp.decode(byteBuf);
+
+                            if (command instanceof RespArray) {
+                                RespArray array = (RespArray) command;
+                                Resp[] params = array.getArray();
+
+                                if (params.length > 0 && params[0] instanceof BulkString) {
+                                    String commandName = ((BulkString) params[0]).getContent().toUtf8String().toUpperCase();
+
+                                    try {
+                                        CommandType commandType = CommandType.valueOf(commandName);
+                                        Command cmd = commandType.getSupplier().apply(redisCore);
+                                        cmd.setContext(params);
+                                        cmd.handle();
+                                        commandsLoaded++;
+
+                                        if (commandsLoaded % 10000 == 0) {
+                                            logger.info("已加载 " + commandsLoaded + " 条命令");
+                                        }
+                                    } catch (IllegalArgumentException e) {
+                                        logger.warn("未知命令: " + commandName);
+                                        commandsFailed++;
+                                    } catch (Exception e) {
+                                        logger.error("执行命令失败: " + commandName, e);
+                                        commandsFailed++;
+                                    }
+                                }
+                            }
+                        } catch (IllegalStateException e) {
+                            // 如果命令不完整，回退到标记位置并等待更多数据
+                            byteBuf.resetReaderIndex();
+                            break;
+                        }
+                    }
+
+                    // 压缩缓冲区，移除已处理的数据
+                    byteBuf.discardReadBytes();
+
+                } catch (Exception e) {
+                    logger.error("处理AOF数据时出错", e);
+                    commandsFailed++;
+                }
+            }
+
+            logger.info("AOF加载完成: 成功加载 " + commandsLoaded + " 条命令, 失败 " + commandsFailed + " 条");
+        } catch (IOException e) {
+            logger.error("读取AOF文件时出错", e);
+            throw e;
+        }
+    }
+
+
+    private void executeBatch(List<Command> commands) {
+        for (Command cmd : commands) {
+            cmd.handle();
+        }
     }
 }

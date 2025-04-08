@@ -22,7 +22,7 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改此标志来开启或关闭AOF功能
-    private static final boolean ENABLE_AOF = false;
+    private static final boolean ENABLE_AOF = true;
 
     private final int port;
     private final RedisCore redisCore;
@@ -60,6 +60,7 @@ public class MyRedisService implements RedisService {
             // 只有在启用AOF时才启动AOF处理器
             if (ENABLE_AOF) {
                 this.aofHandler.start();
+                this.aofHandler.load(redisCore);
                 //logger.info("AOF持久化已启用");
             }
 

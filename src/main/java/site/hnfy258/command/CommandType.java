@@ -56,7 +56,7 @@ public enum CommandType {
         this.supplier = supplier;
     }
 
-    public Function<RedisCore, Command> getSupplier() {
+    public  Function<RedisCore, Command> getSupplier() {
         return supplier;
     }
 }
