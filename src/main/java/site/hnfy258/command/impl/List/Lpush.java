@@ -61,7 +61,7 @@ public class Lpush implements Command {
         redisCore.put(key, list);
 
         int size = list.size();
-        logger.info("LPUSH: " + size);
+        //logger.info("LPUSH: " + size);
         return new BulkString(new BytesWrapper(String.valueOf(size).getBytes()));
     }
 }

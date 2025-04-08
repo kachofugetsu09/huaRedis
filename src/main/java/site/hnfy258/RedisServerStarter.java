@@ -5,8 +5,10 @@ import site.hnfy258.server.MyRedisService;
 import site.hnfy258.server.RedisService;
 
 public class RedisServerStarter {
+    private static final Logger logger = Logger.getLogger(RedisServerStarter.class);
+    private static RedisService redisService;
+
     public static void main(String[] args) {
-        Logger logger = Logger.getLogger(RedisServerStarter.class);
         //默认端口
         int port = 6379;
 
@@ -19,12 +21,19 @@ public class RedisServerStarter {
         }
 
         // 创建并启动Redis服务
-        RedisService redisService = new MyRedisService(port);
+        redisService = new MyRedisService(port);
 
         // 添加关闭钩子
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            logger.info("Shutting down Redis server...");
-            redisService.close();
+            //logger.info("正在关闭Redis服务器...");
+            try {
+                redisService.close();
+                // 给一些时间让日志完成写入
+                Thread.sleep(500);
+            } catch (Exception e) {
+                logger.error("关闭服务时发生错误", e);
+            }
+            //logger.info("Redis服务器已关闭");
         }));
 
         redisService.start();

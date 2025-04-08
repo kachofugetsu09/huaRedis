@@ -13,7 +13,7 @@ public class MyResponseEncoder extends MessageToByteEncoder<Resp> {
     protected void encode(ChannelHandlerContext ctx, Resp resp, ByteBuf out) throws Exception {
         try {
             resp.write(resp, out);
-            logger.info("Encoded response: " + ByteBufUtil.hexDump(out));
+            ////logger.info("Encoded response: " + ByteBufUtil.hexDump(out));
         } catch(Exception e) {
             logger.error("编码异常: " + e.getMessage());
             ctx.close();

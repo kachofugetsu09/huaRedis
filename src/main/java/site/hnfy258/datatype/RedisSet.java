@@ -20,9 +20,9 @@ public class RedisSet implements  RedisData{
     }
 
     public int sadd(List<BytesWrapper> members){
-        logger.info("Adding members to set: " + members);
+        //logger.info("Adding members to set: " + members);
         int addedCount = (int)members.stream().filter(redisSet::add).count();
-        logger.info("Added " + addedCount + " members to set");
+        //logger.info("Added " + addedCount + " members to set");
         return addedCount;
     }
 

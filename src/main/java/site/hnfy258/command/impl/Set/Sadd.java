@@ -41,25 +41,25 @@ public class Sadd implements Command {
     @Override
     public Resp handle() {
         try {
-            logger.info("Handling SADD command for key: " + key);
+            //logger.info("Handling SADD command for key: " + key);
             RedisData redisData = redisCore.get(key);
             if(redisData == null){
-                logger.info("Creating new RedisSet for key: " + key);
+                //logger.info("Creating new RedisSet for key: " + key);
                 RedisSet redisSet = new RedisSet();
                 int sadd = redisSet.sadd(members);
                 redisCore.put(key, redisSet);
-                logger.info("Added " + sadd + " members to new set");
+                //logger.info("Added " + sadd + " members to new set");
                 return new RespInt(sadd);
             }
             else if(redisData instanceof RedisSet){
-                logger.info("Adding to existing RedisSet for key: " + key);
+                //logger.info("Adding to existing RedisSet for key: " + key);
                 RedisSet redisSet = (RedisSet) redisData;
                 int sadd = redisSet.sadd(members);
-                logger.info("Added " + sadd + " members to existing set");
+                //logger.info("Added " + sadd + " members to existing set");
                 return new RespInt(sadd);
             }
             else{
-                logger.info("Wrong type for key: " + key);
+                //logger.info("Wrong type for key: " + key);
                 return new Errors("WRONGTYPE Operation against a key holding the wrong kind of value");
             }
         } catch (Exception e) {

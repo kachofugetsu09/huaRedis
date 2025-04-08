@@ -9,74 +9,149 @@ import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
 import site.hnfy258.protocal.*;
 import site.hnfy258.datatype.BytesWrapper;
+import site.hnfy258.aof.AOFHandler;
 
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MyCommandHandler extends ChannelInboundHandlerAdapter {
+    private static final Logger logger = Logger.getLogger(MyCommandHandler.class);
     private final RedisCoreImpl redisCore;
-    Logger logger = Logger.getLogger(MyCommandHandler.class);
+    private final AOFHandler aofHandler; // 可能为null
 
-    public MyCommandHandler(RedisCore redisCore) {
+    // 使用EnumSet提高查找效率
+    private static final Set<CommandType> WRITE_COMMANDS = EnumSet.of(
+            CommandType.SET, CommandType.DEL, CommandType.INCR, CommandType.MSET,
+            CommandType.EXPIRE, CommandType.SADD, CommandType.SREM, CommandType.SPOP,
+            CommandType.HSET, CommandType.HMEST, CommandType.HDEL,
+            CommandType.LPUSH, CommandType.RPUSH, CommandType.LPOP, CommandType.RPOP, CommandType.LREM,
+            CommandType.ZADD, CommandType.ZREM
+    );
+
+    // 用于统计处理中的命令数量，帮助诊断性能问题
+    private static final AtomicInteger PROCESSING_COMMANDS = new AtomicInteger(0);
+    // 用于控制日志频率，避免日志过多
+    private static final int LOG_INTERVAL = 10000;
+    private static final AtomicInteger LOG_COUNTER = new AtomicInteger(0);
+
+    // 记录最后一次日志时间，用于限制日志频率
+    private static volatile long lastLogTime = System.currentTimeMillis();
+
+    public MyCommandHandler(RedisCore redisCore, AOFHandler aofHandler) {
         this.redisCore = (RedisCoreImpl) redisCore;
+        this.aofHandler = aofHandler; // 可能为null，表示AOF已禁用
     }
 
     @Override
-    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        if (msg instanceof SimpleString) {
-            // 处理 SimpleString 类型的消息
-            ctx.writeAndFlush(msg);
+    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        int currentProcessing = PROCESSING_COMMANDS.incrementAndGet();
+
+        // 限制日志输出频率，避免日志过多影响性能
+        if (LOG_COUNTER.incrementAndGet() % LOG_INTERVAL == 0) {
+            long now = System.currentTimeMillis();
+            if (now - lastLogTime > 5000) { // 至少5秒输出一次
+                ////logger.info("当前处理中的命令数: " + currentProcessing);
+                lastLogTime = now;
+            }
         }
-        else if (msg instanceof RespArray) {
+
+        try {
+            if (msg instanceof SimpleString) {
+                ctx.writeAndFlush(msg);
+                return;
+            }
+
+            if (!(msg instanceof RespArray)) {
+                ctx.writeAndFlush(new Errors("ERR invalid message type"));
+                return;
+            }
+
             RespArray command = (RespArray) msg;
             Resp[] array = command.getArray();
 
-            if (array.length > 0 && array[0] instanceof BulkString) {
-                String commandName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
-
-                try {
-                    CommandType commandType = CommandType.valueOf(commandName);
-                    Command cmd = commandType.getSupplier().apply(redisCore);
-                    cmd.setContext(array);
-
-                    Resp response = cmd.handle();
-                    ctx.writeAndFlush(response).addListener(future -> {
-                        if (future.isSuccess()) {
-                            logger.info("响应发送成功");
-                        } else {
-                            logger.error("响应发送失败: " + future.cause());
-                        }
-                    });
-                } catch (IllegalArgumentException e) {
-                    logger.error("未知命令: " + commandName);
-                    ctx.writeAndFlush(new Errors("ERR unknown command '" + commandName + "'"));
-                }
-            } else {
-                logger.error("无效的命令格式");
+            if (array.length == 0 || !(array[0] instanceof BulkString)) {
                 ctx.writeAndFlush(new Errors("ERR invalid command format"));
+                return;
             }
-        } else {
-            logger.error("无效的消息类型");
-            ctx.writeAndFlush(new Errors("ERR invalid message type"));
+
+            String commandName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
+
+            try {
+                CommandType commandType = CommandType.valueOf(commandName);
+                Command cmd = commandType.getSupplier().apply(redisCore);
+                cmd.setContext(array);
+
+                Resp response = cmd.handle();
+
+                // 如果AOF已启用且是写命令，写入AOF
+                if (aofHandler != null && WRITE_COMMANDS.contains(commandType)) {
+                    try {
+                        aofHandler.append(command);
+                    } catch (Exception e) {
+                        // 在高并发下，减少日志输出频率
+                        if (LOG_COUNTER.get() % 100 == 0) {
+                            logger.error("Failed to append command to AOF: " + e.getMessage());
+                        }
+                    }
+                }
+
+                // 使用无监听器的写入方式，减少回调开销
+                ctx.writeAndFlush(response);
+
+            } catch (IllegalArgumentException e) {
+                // 未知命令
+                ctx.writeAndFlush(new Errors("ERR unknown command '" + commandName + "'"));
+            } catch (Exception e) {
+                // 处理命令时的其他异常
+                logger.error("Error processing command: " + commandName, e);
+                ctx.writeAndFlush(new Errors("ERR internal error: " + e.getMessage()));
+            }
+        } finally {
+            // 确保计数器减少
+            PROCESSING_COMMANDS.decrementAndGet();
         }
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("异常捕获: " + cause.getMessage());
+        // 减少日志输出频率，避免日志风暴
+        if (LOG_COUNTER.get() % 100 == 0) {
+            logger.error("Channel exception: " + cause.getMessage());
+        }
+
+        // 关闭连接
         ctx.close();
     }
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
-        logger.info("客户端连接: " + ctx.channel().remoteAddress());
+        // 减少日志输出，只在开发环境或需要时启用
+        if (logger.isDebugEnabled()) {
+            logger.debug("Client connected: " + ctx.channel().remoteAddress());
+        }
+
         BytesWrapper clientName = new BytesWrapper(("Client-" + ctx.channel().id().asShortText()).getBytes());
         redisCore.putClient(clientName, ctx.channel());
-        logger.info("当前连接的客户端数: " + redisCore.getConnectedClientsCount());
+
+        // 限制日志频率
+        if (LOG_COUNTER.incrementAndGet() % 100 == 0) {
+            //logger.info("Connected clients: " + redisCore.getConnectedClientsCount());
+        }
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        logger.info("客户端断开: " + ctx.channel().remoteAddress());
+        // 减少日志输出，只在开发环境或需要时启用
+        if (logger.isDebugEnabled()) {
+            logger.debug("Client disconnected: " + ctx.channel().remoteAddress());
+        }
+
         redisCore.disconnectClient(ctx.channel());
-        logger.info("当前连接的客户端数: " + redisCore.getConnectedClientsCount());
+
+        // 限制日志频率
+        if (LOG_COUNTER.incrementAndGet() % 100 == 0) {
+            //logger.info("Connected clients: " + redisCore.getConnectedClientsCount());
+        }
     }
 }

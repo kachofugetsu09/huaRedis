@@ -14,12 +14,12 @@ public class MyDecoder extends ByteToMessageDecoder {
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         try {
             if (in.readableBytes() > 0) {
-                logger.info("开始解码");
+                //logger.info("开始解码");
                 // 标记当前读取位置
                 in.markReaderIndex();
                 try {
                     Resp decoded = Resp.decode(in);
-                    logger.info("解码成功");
+                    //logger.info("解码成功");
                     out.add(decoded);
                 } catch (Exception e) {
                     logger.error("解码异常: " + e.getMessage());

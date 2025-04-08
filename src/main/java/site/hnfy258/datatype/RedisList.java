@@ -1,5 +1,6 @@
 package site.hnfy258.datatype;
 
+import java.util.Collections;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
@@ -50,10 +51,15 @@ public class RedisList implements  RedisData{
         return list.pollLast();
     }
 
-    public List<BytesWrapper> lrange(int start, int end){
-        List<BytesWrapper> res =  list.stream().skip(start)
-                .limit(end-start>=0?end-start+1:0).collect(Collectors.toList());
-        return res;
+    public List<BytesWrapper> lrange(int start, int end) {
+        int size = list.size();
+        start = Math.max(0, start);
+        end = Math.min(size - 1, end);
+
+        if (start <= end) {
+            return list.subList(start, end + 1);
+        }
+        return Collections.emptyList();
     }
 
     public int remove(BytesWrapper value) {
