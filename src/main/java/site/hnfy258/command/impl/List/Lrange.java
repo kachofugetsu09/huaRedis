@@ -42,15 +42,20 @@ public class Lrange implements Command {
     @Override
     public Resp handle() {
         RedisData redisData = redisCore.get(key);
-        if(redisData==null){
+        if (redisData == null) {
             return new BulkString(new BytesWrapper("".getBytes()));
         }
-        if(redisData instanceof RedisList){
+        if (redisData instanceof RedisList) {
             RedisList redisList = (RedisList) redisData;
             List<BytesWrapper> lrange = redisList.lrange(start, end);
-            List<BulkString> bulkStrings = lrange.stream().map(BulkString::new).collect(Collectors.toList());
-            RespArray respArray = new RespArray(bulkStrings.toArray(new Resp[0]));
-            return respArray;
+
+            // 直接创建RespArray，避免中间集合
+            Resp[] respArray = new Resp[lrange.size()];
+            for (int i = 0; i < lrange.size(); i++) {
+                respArray[i] = new BulkString(lrange.get(i));
+            }
+
+            return new RespArray(respArray);
         }
         return new Errors("WRONGTYPE Operation against a key holding the wrong kind of value");
     }
