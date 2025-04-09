@@ -22,7 +22,7 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改此标志来开启或关闭AOF功能
-    private static final boolean ENABLE_AOF = true;
+    private static final boolean ENABLE_AOF = false;
 
     private final int port;
     private final RedisCore redisCore;

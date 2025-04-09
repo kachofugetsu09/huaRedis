@@ -2,67 +2,42 @@ package site.hnfy258.protocal;
 
 import io.netty.buffer.ByteBuf;
 
-import java.nio.charset.StandardCharsets;
-import org.apache.commons.pool2.BasePooledObjectFactory;
-import org.apache.commons.pool2.PooledObject;
-import org.apache.commons.pool2.impl.DefaultPooledObject;
-import org.apache.commons.pool2.impl.GenericObjectPool;
-
 public class RespArray extends Resp {
+    private static final byte[] CRLF = {'\r', '\n'};
+    private static final int MAX_CACHED_SIZE = 32;
+    private static final byte[][] CACHED_INT_BYTES = new byte[MAX_CACHED_SIZE][];
+
+    static {
+        for (int i = 0; i < MAX_CACHED_SIZE; i++) {
+            CACHED_INT_BYTES[i] = Integer.toString(i).getBytes();
+        }
+    }
+
     private Resp[] array;
-
-    private static final GenericObjectPool<RespArray> POOL = new GenericObjectPool<>(new BasePooledObjectFactory<RespArray>() {
-        @Override
-        public RespArray create() {
-            return new RespArray(null);
-        }
-
-        @Override
-        public PooledObject<RespArray> wrap(RespArray respArray) {
-            return new DefaultPooledObject<>(respArray);
-        }
-    });
 
     public RespArray(Resp[] array) {
         this.array = array;
-    }
-
-    public static RespArray newInstance(Resp[] array) {
-        try {
-            RespArray instance = POOL.borrowObject();
-            instance.array = array;
-            return instance;
-        } catch (Exception e) {
-            // 如果池出现问题，退回到直接创建新对象
-            return new RespArray(array);
-        }
-    }
-
-    public void recycle() {
-        array = null;
-        POOL.returnObject(this);
-    }
-
-    @Override
-    public void write(Resp resp, ByteBuf buffer) {
-        buffer.writeByte('*');
-        Resp[] array = ((RespArray) resp).getArray();
-        writeIntString(buffer, array.length);
-        for (Resp each : array) {
-            each.write(each, buffer);
-        }
     }
 
     public Resp[] getArray() {
         return array;
     }
 
-    private void writeIntString(ByteBuf buffer, int value) {
-        if (value < 10) {
-            buffer.writeByte((byte) ('0' + value));
-        } else {
-            buffer.writeBytes(String.valueOf(value).getBytes(StandardCharsets.US_ASCII));
+    @Override
+    public void write(Resp resp, ByteBuf buffer) {
+        buffer.writeByte('*');
+        writeIntString(buffer, array.length);
+        for (Resp each : array) {
+            each.write(each, buffer);
         }
-        buffer.writeBytes(new byte[]{'\r', '\n'});
+    }
+
+    private void writeIntString(ByteBuf buffer, int value) {
+        if (value < MAX_CACHED_SIZE) {
+            buffer.writeBytes(CACHED_INT_BYTES[value]);
+        } else {
+            buffer.writeBytes(Integer.toString(value).getBytes());
+        }
+        buffer.writeBytes(CRLF);
     }
 }
