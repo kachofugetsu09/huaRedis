@@ -22,7 +22,10 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改此标志来开启或关闭AOF功能
-    private static final boolean ENABLE_AOF = false;
+    private static final boolean ENABLE_AOF = true;
+
+    // 默认数据库数量，与Redis默认值保持一致
+    private static final int DEFAULT_DB_NUM = 16;
 
     private final int port;
     private final RedisCore redisCore;
@@ -35,8 +38,12 @@ public class MyRedisService implements RedisService {
     private EventLoopGroup workerGroup;
 
     public MyRedisService(int port) {
+        this(port, DEFAULT_DB_NUM);
+    }
+
+    public MyRedisService(int port, int dbNum) {
         this.port = port;
-        this.redisCore = new RedisCoreImpl();
+        this.redisCore = new RedisCoreImpl(dbNum);
         this.channelOption = new DefaultChannelSelectStrategy().select();
         this.commandExecutor = new DefaultEventExecutorGroup(1,
                 new DefaultThreadFactory("redis-cmd"));
@@ -51,6 +58,7 @@ public class MyRedisService implements RedisService {
         }
     }
 
+    // 其余方法保持不变...
     @Override
     public void start() {
         this.bossGroup = channelOption.boss();
@@ -155,5 +163,4 @@ public class MyRedisService implements RedisService {
     public RedisCore getRedisCore() {
         return redisCore;
     }
-
 }

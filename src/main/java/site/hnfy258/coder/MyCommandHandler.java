@@ -26,7 +26,7 @@ public class MyCommandHandler extends ChannelInboundHandlerAdapter {
             CommandType.EXPIRE, CommandType.SADD, CommandType.SREM, CommandType.SPOP,
             CommandType.HSET, CommandType.HMEST, CommandType.HDEL,
             CommandType.LPUSH, CommandType.RPUSH, CommandType.LPOP, CommandType.RPOP, CommandType.LREM,
-            CommandType.ZADD, CommandType.ZREM
+            CommandType.ZADD, CommandType.ZREM,CommandType.SELECT
     );
 
     // 用于统计处理中的命令数量，帮助诊断性能问题

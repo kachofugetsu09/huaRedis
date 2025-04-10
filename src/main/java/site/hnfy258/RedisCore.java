@@ -22,4 +22,8 @@ package site.hnfy258;
      long remove(List<BytesWrapper> keys);
  
      void cleanAll();
+
+     void selectDB(int index);
+
+     int getDbNum();
  }

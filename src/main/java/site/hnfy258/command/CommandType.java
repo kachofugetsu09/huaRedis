@@ -47,6 +47,7 @@ public enum CommandType {
     ZREM(Zrem::new),
     ZCARD(Zcard::new),
     ZSCORE(Zscore::new),
+    SELECT(Select::new),
     GET(Get::new);
 
 

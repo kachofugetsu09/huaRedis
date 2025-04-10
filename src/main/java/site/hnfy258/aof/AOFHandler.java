@@ -243,64 +243,68 @@ public class AOFHandler {
     public void load(RedisCore redisCore) throws IOException {
         logger.info("开始加载AOF文件: " + filename);
 
-        // 1. 检查AOF文件是否存在且非空
         File file = new File(filename);
         if (!file.exists() || file.length() == 0) {
             logger.info("AOF文件不存在或为空，跳过加载");
             return;
         }
 
-        // 2. 使用NIO方式读取文件（try-with-resources确保自动关闭）
         try (FileChannel channel = new RandomAccessFile(filename, "r").getChannel()) {
-            // 3. 初始化缓冲区
-            ByteBuffer buffer = ByteBuffer.allocate(8192); // 8KB的文件读取缓冲区
-            ByteBuf byteBuf = Unpooled.buffer();          // Netty缓冲区用于命令解析
+            ByteBuffer buffer = ByteBuffer.allocate(8192);
+            ByteBuf byteBuf = Unpooled.buffer();
 
-            int commandsLoaded = 0;  // 成功加载命令计数器
-            int commandsFailed = 0;  // 失败命令计数器
+            int commandsLoaded = 0;
+            int commandsFailed = 0;
+            int currentDbIndex = 0;
 
-            // 4. 主读取循环（从文件读取数据）
             while (channel.read(buffer) != -1) {
-                // 4.1 准备读取buffer中的数据
                 buffer.flip();
-                // 4.2 将数据从ByteBuffer转移到Netty的ByteBuf
                 byteBuf.writeBytes(buffer);
-                // 4.3 清空buffer以便下次读取
                 buffer.clear();
 
                 try {
-                    // 5. 命令解析循环（处理ByteBuf中的数据）
                     while (byteBuf.isReadable()) {
-                        // 5.1 标记当前位置，以便解析失败时回退
                         byteBuf.markReaderIndex();
 
                         try {
-                            // 6. 解析Redis协议格式的命令
                             Resp command = Resp.decode(byteBuf);
 
-                            // 7. 处理数组类型的命令（Redis命令都以数组形式存储）
                             if (command instanceof RespArray) {
                                 RespArray array = (RespArray) command;
                                 Resp[] params = array.getArray();
 
-                                // 7.1 验证命令格式（第一个参数必须是BulkString表示命令名）
                                 if (params.length > 0 && params[0] instanceof BulkString) {
                                     String commandName = ((BulkString) params[0]).getContent()
                                             .toUtf8String().toUpperCase();
 
                                     try {
-                                        // 8. 根据命令名创建对应的命令对象
-                                        CommandType commandType = CommandType.valueOf(commandName);
-                                        Command cmd = commandType.getSupplier().apply(redisCore);
+                                        if (commandName.equals("SELECT") && params.length > 1 && params[1] instanceof BulkString) {
+                                            String dbIndexStr = ((BulkString) params[1]).getContent().toUtf8String();
+                                            try {
+                                                int dbIndex = Integer.parseInt(dbIndexStr);
+                                                if (dbIndex >= 0 && dbIndex < redisCore.getDbNum()) {
+                                                    currentDbIndex = dbIndex;
+                                                    redisCore.selectDB(currentDbIndex);
+                                                    logger.debug("切换到数据库: " + currentDbIndex);
+                                                } else {
+                                                    logger.warn("无效的数据库索引: " + dbIndex);
+                                                }
+                                            } catch (NumberFormatException e) {
+                                                logger.warn("无效的数据库索引格式: " + dbIndexStr);
+                                            }
+                                        } else {
+                                            // 对于非SELECT命令，确保在正确的数据库上执行
+                                            redisCore.selectDB(currentDbIndex);
 
-                                        // 9. 设置命令参数并执行
-                                        cmd.setContext(params);
-                                        cmd.handle();
-                                        commandsLoaded++;
+                                            CommandType commandType = CommandType.valueOf(commandName);
+                                            Command cmd = commandType.getSupplier().apply(redisCore);
+                                            cmd.setContext(params);
+                                            cmd.handle();
+                                            commandsLoaded++;
 
-                                        // 10. 每10000条命令打印进度
-                                        if (commandsLoaded % 10000 == 0) {
-                                            logger.info("已加载 " + commandsLoaded + " 条命令");
+                                            if (commandsLoaded % 10000 == 0) {
+                                                logger.info("已加载 " + commandsLoaded + " 条命令");
+                                            }
                                         }
                                     } catch (IllegalArgumentException e) {
                                         logger.warn("未知命令: " + commandName);
@@ -312,13 +316,11 @@ public class AOFHandler {
                                 }
                             }
                         } catch (IllegalStateException e) {
-                            // 11. 处理不完整命令（回退并等待更多数据）
                             byteBuf.resetReaderIndex();
                             break;
                         }
                     }
 
-                    // 12. 压缩缓冲区（回收已处理数据占用的空间）
                     byteBuf.discardReadBytes();
 
                 } catch (Exception e) {
@@ -327,11 +329,12 @@ public class AOFHandler {
                 }
             }
 
-            // 13. 最终统计信息输出
             logger.info("AOF加载完成: 成功加载 " + commandsLoaded + " 条命令, 失败 " + commandsFailed + " 条");
         } catch (IOException e) {
             logger.error("读取AOF文件时出错", e);
             throw e;
         }
     }
+
+
 }
