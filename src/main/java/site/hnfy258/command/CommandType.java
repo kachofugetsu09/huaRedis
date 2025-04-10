@@ -48,6 +48,8 @@ public enum CommandType {
     ZCARD(Zcard::new),
     ZSCORE(Zscore::new),
     SELECT(Select::new),
+    SCAN(Scan::new),
+    TYPE(Type::new),
     GET(Get::new);
 
 
