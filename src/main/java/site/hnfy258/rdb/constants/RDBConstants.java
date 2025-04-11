@@ -1,4 +1,4 @@
-package site.hnfy258.rdb;
+package site.hnfy258.rdb.constants;
 
 public class RDBConstants {
     public static final String RDB_FILE_NAME = "dump.rdb";

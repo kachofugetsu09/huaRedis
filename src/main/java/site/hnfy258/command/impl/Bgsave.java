@@ -6,7 +6,7 @@ import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
 import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.SimpleString;
-import site.hnfy258.rdb.RDBHandler;
+import site.hnfy258.rdb.core.RDBHandler;
 
 public class Bgsave implements Command {
     private final RedisCore redisCore;

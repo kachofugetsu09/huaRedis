@@ -10,7 +10,7 @@
     import site.hnfy258.protocal.*;
     import site.hnfy258.datatype.BytesWrapper;
     import site.hnfy258.aof.AOFHandler;
-    import site.hnfy258.rdb.RDBHandler;
+    import site.hnfy258.rdb.core.RDBHandler;
 
     import java.util.EnumSet;
     import java.util.Set;

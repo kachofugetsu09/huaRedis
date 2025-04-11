@@ -4,11 +4,13 @@ import org.apache.log4j.Logger;
 import site.hnfy258.server.MyRedisService;
 import site.hnfy258.server.RedisService;
 
+import java.io.IOException;
+
 public class RedisServerStarter {
     private static final Logger logger = Logger.getLogger(RedisServerStarter.class);
     private static RedisService redisService;
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
         //默认端口
         int port = 6379;
 

@@ -9,13 +9,14 @@ import io.netty.util.concurrent.EventExecutorGroup;
 import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.RedisCoreImpl;
+import site.hnfy258.aof.AOFSyncStrategy;
 import site.hnfy258.coder.MyCommandHandler;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
 import site.hnfy258.aof.AOFHandler;
-import site.hnfy258.rdb.RDBHandler;
+import site.hnfy258.rdb.core.RDBHandler;
 
 import java.io.IOException;
 
@@ -23,8 +24,8 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改这些标志来开启或关闭AOF和RDB功能
-    private static final boolean ENABLE_AOF = false;
-    private static final boolean ENABLE_RDB = true;
+    private static final boolean ENABLE_AOF = true;
+    private static final boolean ENABLE_RDB = false;
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;
@@ -40,11 +41,11 @@ public class MyRedisService implements RedisService {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
 
-    public MyRedisService(int port) {
+    public MyRedisService(int port) throws IOException {
         this(port, DEFAULT_DB_NUM);
     }
 
-    public MyRedisService(int port, int dbNum) {
+    public MyRedisService(int port, int dbNum) throws IOException {
         this.port = port;
         this.redisCore = new RedisCoreImpl(dbNum);
         this.channelOption = new DefaultChannelSelectStrategy().select();
@@ -64,7 +65,7 @@ public class MyRedisService implements RedisService {
         // 根据配置决定是否初始化AOF处理器
         if (ENABLE_AOF) {
             this.aofHandler = new AOFHandler("redis.aof");
-            this.aofHandler.setSyncStrategy(AOFHandler.AOFSyncStrategy.EVERYSEC);
+            this.aofHandler.setSyncStrategy(AOFSyncStrategy.EVERYSEC);
             //logger.info("AOF功能已启用");
         } else {
             this.aofHandler = null;
