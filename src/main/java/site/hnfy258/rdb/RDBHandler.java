@@ -22,6 +22,8 @@ public class RDBHandler {
     private volatile boolean isSaving = false;
     private final List<SavePoint> savePoints = new ArrayList<>();
 
+    private final ExecutorService ioExecutor;
+
     private static final String FULL_RDB_FILE_NAME = RDBConstants.RDB_FILE_NAME;
     private static final String INCREMENTAL_RDB_FILE_NAME = RDBConstants.RDB_FILE_NAME + ".inc";
     private long lastFullSaveTime = 0;
@@ -55,6 +57,12 @@ public class RDBHandler {
             t.setDaemon(true);
             return t;
         });
+        this.ioExecutor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors(),
+                r -> {
+                    Thread t = new Thread(r, "rdb-io-worker");
+                    t.setDaemon(true);
+                    return t;
+                });
 
         // 添加默认的保存点配置，类似Redis的默认配置
         savePoints.add(new SavePoint(900, 1));   // 900秒内有1次修改
@@ -134,50 +142,64 @@ public class RDBHandler {
                 .put(key, System.currentTimeMillis());
     }
 
-    private void doIncrementalSave() throws IOException {
-        File tempFile = new File(INCREMENTAL_RDB_FILE_NAME + ".tmp");
+    private CompletableFuture<Void> doIncrementalSaveAsync() {
+        return CompletableFuture.runAsync(() -> {
+            File tempFile = new File(INCREMENTAL_RDB_FILE_NAME + ".tmp");
 
-        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(tempFile))) {
-            writeRDBHeader(dos);
+            try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(tempFile)))) {
+                writeRDBHeader(dos);
 
-            for (Map.Entry<Integer, Map<BytesWrapper, Long>> dbEntry : lastModifiedMap.entrySet()) {
-                int dbIndex = dbEntry.getKey();
-                Map<BytesWrapper, Long> modifiedKeys = dbEntry.getValue();
+                List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-                if (!modifiedKeys.isEmpty()) {
-                    writeSelectDB(dos, dbIndex);
-                    Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
+                for (Map.Entry<Integer, Map<BytesWrapper, Long>> dbEntry : lastModifiedMap.entrySet()) {
+                    int dbIndex = dbEntry.getKey();
+                    Map<BytesWrapper, Long> modifiedKeys = dbEntry.getValue();
 
-                    for (Map.Entry<BytesWrapper, Long> entry : modifiedKeys.entrySet()) {
-                        BytesWrapper key = entry.getKey();
-                        RedisData value = dbData.get(key);
-                        if (value != null) {
-                            saveEntry(dos, key, value);
+                    if (!modifiedKeys.isEmpty()) {
+                        writeSelectDB(dos, dbIndex);
+                        Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
+
+                        for (Map.Entry<BytesWrapper, Long> entry : modifiedKeys.entrySet()) {
+                            BytesWrapper key = entry.getKey();
+                            RedisData value = dbData.get(key);
+                            if (value != null) {
+                                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                                    try {
+                                        saveEntry(dos, key, value);
+                                    } catch (IOException e) {
+                                        throw new CompletionException(e);
+                                    }
+                                }, ioExecutor);
+                                futures.add(future);
+                            }
                         }
                     }
                 }
+
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+                writeRDBFooter(dos);
+            } catch (IOException e) {
+                throw new CompletionException(e);
             }
 
-            writeRDBFooter(dos);
-        }
-
-        // 原子性地替换文件
-        File incRdbFile = new File(INCREMENTAL_RDB_FILE_NAME);
-        if (!tempFile.renameTo(incRdbFile)) {
-            // 如果重命名失败，尝试复制内容并删除临时文件
-            try (InputStream in = new FileInputStream(tempFile);
-                 OutputStream out = new FileOutputStream(incRdbFile)) {
-                byte[] buffer = new byte[8192];
-                int bytesRead;
-                while ((bytesRead = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, bytesRead);
+            File incRdbFile = new File(INCREMENTAL_RDB_FILE_NAME);
+            if (!tempFile.renameTo(incRdbFile)) {
+                try (InputStream in = new FileInputStream(tempFile);
+                     OutputStream out = new FileOutputStream(incRdbFile)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, bytesRead);
+                    }
+                } catch (IOException e) {
+                    throw new CompletionException(e);
                 }
+                tempFile.delete();
             }
-            tempFile.delete();
-        }
 
-        // 清除已保存的增量数据
-        lastModifiedMap.clear();
+            lastModifiedMap.clear();
+        }, ioExecutor);
     }
 
     public CompletableFuture<Boolean> save() {
@@ -201,28 +223,82 @@ public class RDBHandler {
         }
 
         isSaving = true;
-        saveExecutor.submit(() -> {
-            try {
-                if (fullSave) {
-                    Map<Integer, Map<BytesWrapper, RedisData>> snapshot = new HashMap<>();
-                    for (Integer dbIndex : lastModifiedMap.keySet()) {
-                        Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
-                        snapshot.put(dbIndex, filterUnmodifiedData(dbData, lastModifiedMap.get(dbIndex)));
-                    }
-                    doSaveWithSnapshot(snapshot);
-                } else {
-                    logger.info("开始后台增量保存RDB文件");
-                    doIncrementalSave();
-                    logger.info("RDB文件增量后台保存完成");
-                }
-            } catch (Exception e) {
-                logger.error("后台保存RDB文件失败", e);
-            } finally {
-                isSaving = false;
+        CompletableFuture<Void> saveFuture;
+
+        if (fullSave) {
+            Map<Integer, Map<BytesWrapper, RedisData>> snapshot = new HashMap<>();
+            for (Integer dbIndex : lastModifiedMap.keySet()) {
+                Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
+                snapshot.put(dbIndex, filterUnmodifiedData(dbData, lastModifiedMap.get(dbIndex)));
             }
+            saveFuture = doSaveWithSnapshotAsync(snapshot);
+        } else {
+            logger.info("开始后台增量保存RDB文件");
+            saveFuture = doIncrementalSaveAsync();
+        }
+
+        saveFuture.whenComplete((result, ex) -> {
+            if (ex != null) {
+                logger.error("后台保存RDB文件失败", ex);
+            } else {
+                logger.info("RDB文件" + (fullSave ? "全量" : "增量") + "后台保存完成");
+            }
+            isSaving = false;
         });
 
         return true;
+    }
+
+    private CompletableFuture<Void> doSaveWithSnapshotAsync(Map<Integer, Map<BytesWrapper, RedisData>> snapshot) {
+        return CompletableFuture.runAsync(() -> {
+            File tempFile = new File(RDBConstants.RDB_FILE_NAME + ".tmp");
+
+            try (DataOutputStream dos = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(tempFile)))) {
+                writeRDBHeader(dos);
+
+                List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+                for (Map.Entry<Integer, Map<BytesWrapper, RedisData>> entry : snapshot.entrySet()) {
+                    int dbIndex = entry.getKey();
+                    Map<BytesWrapper, RedisData> dbData = entry.getValue();
+
+                    if (!dbData.isEmpty()) {
+                        writeSelectDB(dos, dbIndex);
+                        for (Map.Entry<BytesWrapper, RedisData> dataEntry : dbData.entrySet()) {
+                            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                                try {
+                                    saveEntry(dos, dataEntry.getKey(), dataEntry.getValue());
+                                } catch (IOException e) {
+                                    throw new CompletionException(e);
+                                }
+                            }, ioExecutor);
+                            futures.add(future);
+                        }
+                    }
+                }
+
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+                writeRDBFooter(dos);
+            } catch (IOException e) {
+                throw new CompletionException(e);
+            }
+
+            File rdbFile = new File(RDBConstants.RDB_FILE_NAME);
+            if (!tempFile.renameTo(rdbFile)) {
+                try (InputStream in = new FileInputStream(tempFile);
+                     OutputStream out = new FileOutputStream(rdbFile)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, bytesRead);
+                    }
+                } catch (IOException e) {
+                    throw new CompletionException(e);
+                }
+                tempFile.delete();
+            }
+        }, ioExecutor);
     }
 
     private Map<BytesWrapper, RedisData> filterUnmodifiedData(
@@ -594,13 +670,18 @@ public class RDBHandler {
     public void shutdown() {
         scheduler.shutdown();
         saveExecutor.shutdown();
+        ioExecutor.shutdown();
         try {
-            // 等待任务完成
-            if (!saveExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+            if (!saveExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 saveExecutor.shutdownNow();
             }
+            if (!ioExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                ioExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
-            saveExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }
