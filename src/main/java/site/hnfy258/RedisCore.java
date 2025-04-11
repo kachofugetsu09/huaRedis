@@ -34,7 +34,7 @@ package site.hnfy258;
 
      Map<BytesWrapper, RedisData> getAll();
 
-     void setDB(int currentDb, BytesWrapper bytesWrapper, RedisString redisString);
+     void setDB(int currentDb, BytesWrapper bytesWrapper, RedisData redisData);
 
      Map<BytesWrapper, RedisData> getDBData(int dbIndex);
  }

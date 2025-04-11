@@ -117,8 +117,8 @@ public class RedisCoreImpl implements RedisCore {
     }
 
     @Override
-    public void setDB(int currentDb, BytesWrapper bytesWrapper, RedisString redisString) {
-        databases.get(currentDb).put(bytesWrapper, redisString);
+    public void setDB(int currentDb, BytesWrapper bytesWrapper, RedisData redisData) {
+        databases.get(currentDb).put(bytesWrapper, redisData);
     }
 
     public void disconnectClient(Channel channel) {

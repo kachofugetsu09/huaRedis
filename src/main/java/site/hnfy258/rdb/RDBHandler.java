@@ -3,6 +3,7 @@ package site.hnfy258.rdb;
 import site.hnfy258.RedisCore;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
+import site.hnfy258.datatype.RedisList;
 import site.hnfy258.datatype.RedisString;
 
 import java.io.*;
@@ -52,6 +53,30 @@ public class RDBHandler {
                         // 写入值
                         writeString(dos, ((RedisString) value).getValue().getBytes());
                     }
+
+                    if (value instanceof RedisString) {
+                        // Existing string handling code
+                        dos.writeByte(RDBConstants.STRING_TYPE);
+                        writeString(dos, key.getBytes());
+                        writeString(dos, ((RedisString) value).getValue().getBytes());
+                    } else if (value instanceof RedisList) {
+                        // New list handling code
+                        dos.writeByte(RDBConstants.LIST_TYPE);
+
+                        // Write key
+                        writeString(dos, key.getBytes());
+
+                        // Write list size
+                        RedisList list = (RedisList) value;
+                        int listSize = list.size();
+                        writeLength(dos, listSize);
+
+                        // Write each list element
+                        for (BytesWrapper element : list.getAllElements()) {
+                            writeString(dos, element.getBytes());
+                        }
+                    }
+
                     // 这里可以添加其他数据类型的处理
                 }
             }
@@ -119,6 +144,19 @@ public class RDBHandler {
                         redisCore.setDB(currentDb, key, new RedisString(value));
                         logger.debug("加载键值对到数据库" + currentDb + ": " + key);
                         break;
+                    case RDBConstants.LIST_TYPE:
+                        BytesWrapper listKey = new BytesWrapper(readString(dis));
+                        long listSize = readLength(dis);
+
+                        RedisList redisList = new RedisList();
+                        for (int i = 0; i < listSize; i++) {
+                            BytesWrapper element = new BytesWrapper(readString(dis));
+                            redisList.rpush(element);
+                        }
+
+                        redisCore.setDB(currentDb, listKey, redisList);
+                        logger.debug("加载列表到数据库" + currentDb + ": " + listKey + " (元素数: " + listSize + ")");
+                        break;
                     case RDBConstants.RDB_OPCODE_EXPIRETIME:
                     case RDBConstants.RDB_OPCODE_EXPIRETIME_MS:
                         logger.warn("暂不支持过期时间，跳过");
@@ -155,37 +193,10 @@ public class RDBHandler {
 
     // Redis RDB文件使用特殊编码来存储长度
     private void writeLength(DataOutputStream dos, long length) throws IOException {
-        if (length < (1 << 6)) {
-            // 6位长度
-            dos.writeByte((int) length);
-        } else if (length < (1 << 14)) {
-            // 14位长度
-            dos.writeByte(((int) length >> 8) | 0x40);
-            dos.writeByte((int) length);
-        } else {
-            // 32位长度
-            dos.writeByte(0x80);
-            dos.writeInt((int) length);
-        }
+        dos.writeInt((int) length);
     }
 
     private long readLength(DataInputStream dis) throws IOException {
-        int firstByte = dis.readByte() & 0xFF;
-        int type = (firstByte & 0xC0) >> 6;
-
-        switch (type) {
-            case 0:
-                // 6位长度
-                return firstByte & 0x3F;
-            case 1:
-                // 14位长度
-                int secondByte = dis.readByte() & 0xFF;
-                return ((firstByte & 0x3F) << 8) | secondByte;
-            case 2:
-                // 32位长度
-                return dis.readInt() & 0xFFFFFFFFL;
-            default:
-                throw new IOException("Invalid length encoding");
-        }
+        return dis.readInt() & 0xFFFFFFFFL;
     }
 }

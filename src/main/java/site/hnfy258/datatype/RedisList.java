@@ -1,9 +1,6 @@
 package site.hnfy258.datatype;
 
-import java.util.Collections;
-import java.util.Deque;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class RedisList implements  RedisData{
@@ -70,5 +67,8 @@ public class RedisList implements  RedisData{
         return count;
     }
 
-    
+    public List<BytesWrapper> getAllElements() {
+        return new ArrayList<>(list);
+    }
+
 }
