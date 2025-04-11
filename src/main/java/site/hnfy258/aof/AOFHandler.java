@@ -9,6 +9,7 @@ import site.hnfy258.command.CommandType;
 import site.hnfy258.protocal.BulkString;
 import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.RespArray;
+import site.hnfy258.utils.DoubleBufferBlockingQueue;
 
 import java.io.*;
 import java.nio.ByteBuffer;
@@ -33,9 +34,10 @@ public class AOFHandler {
     private Thread syncThread;
 
     private static final int BUFFER_SIZE = 2 * 1024 * 1024; // 2MB buffer
-    private ByteBuffer currentBuffer;
-    private ByteBuffer flushingBuffer;
-    private CommandType commandType;
+
+
+    private DoubleBufferBlockingQueue bufferQueue;
+
 
     // AOF同步策略
     public enum AOFSyncStrategy {
@@ -51,8 +53,8 @@ public class AOFHandler {
         this.filename = filename;
         this.commandQueue = new LinkedBlockingQueue<>();
         this.running = new AtomicBoolean(true);
-        this.currentBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
-        this.flushingBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE);
+
+        this.bufferQueue = new DoubleBufferBlockingQueue(BUFFER_SIZE);
     }
 
     public void start() throws IOException {
@@ -89,68 +91,43 @@ public class AOFHandler {
     private void backgroundSave() {
         while (running.get()) {
             try {
-                // 1. 从阻塞队列获取待持久化的Redis命令
-                // 使用100ms超时避免无限阻塞，同时平衡响应速度和CPU使用率
                 Resp command = commandQueue.poll(100, TimeUnit.MILLISECONDS);
-
                 if (command != null) {
-                    // 2. 序列化Redis命令
-                    // 使用非池化缓冲区(每个命令独立分配，适合短生命周期对象)
                     ByteBuf buf = Unpooled.buffer();
                     command.write(command, buf);
-                    int serializedSize = buf.readableBytes();
+                    ByteBuffer byteBuffer = buf.nioBuffer();
 
-                    // 3. 检查当前缓冲区剩余空间
-                    // 如果空间不足，交换缓冲区并将数据刷盘
-                    if (currentBuffer.remaining() < serializedSize) {
-                        swapBuffers();
-                    }
+                    bufferQueue.put(byteBuffer);
 
-                    // 4. 将序列化后的命令写入当前缓冲区
-                    currentBuffer.put(buf.nioBuffer());
-
-                    // 5. 处理ALWAYS同步策略
-                    // 每次写入后立即交换缓冲区确保数据持久化
                     if (syncStrategy == AOFSyncStrategy.ALWAYS) {
-                        swapBuffers();
+                        flushBuffer();
                     }
                 }
             } catch (InterruptedException e) {
-                // 6. 处理线程中断
                 Thread.currentThread().interrupt();
                 break;
-            } catch (IOException e) {
-                // 7. 处理IO异常
-                logger.error("AOF文件写入错误", e);
+            } catch (Exception e) {
+                logger.error("AOF写入错误", e);
                 if (running.get()) {
-                    logger.error("由于IO错误禁用AOF功能");
-                    running.set(false); // 优雅降级，禁用AOF但保持服务运行
+                    logger.error("由于错误禁用AOF功能");
+                    running.set(false);
                 }
             }
         }
 
-        // 8. 线程结束前的清理工作
         try {
-            swapBuffers();  // 确保所有数据都交换到刷盘缓冲区
-            flushBuffer();  // 最后一次写到磁盘
+            flushBuffer();
         } catch (IOException e) {
             logger.error("最终AOF刷盘错误", e);
         }
     }
 
-    /**
-     * 后台同步线程，按策略定期将缓冲区内容刷入磁盘
-     */
     private void backgroundSync() {
         while (running.get()) {
             try {
-                // 1. 每秒触发一次同步(EVERYSEC策略)
                 Thread.sleep(1000);
-
-                // 2. 交换缓冲区并写到磁盘
-                swapBuffers();
+                flushBuffer();
             } catch (InterruptedException e) {
-                // 3. 处理线程中断
                 Thread.currentThread().interrupt();
                 break;
             } catch (IOException e) {
@@ -159,33 +136,10 @@ public class AOFHandler {
         }
     }
 
-    /**
-     * 交换双缓冲区并刷盘(线程安全)
-     *
-     * @throws IOException 如果刷盘失败抛出IO异常
-     */
-    private synchronized void swapBuffers() throws IOException {
-        // 1. 交换缓冲区引用(原子操作)
-        // 当前缓冲区变为刷盘缓冲区，刷盘缓冲区变为当前缓冲区
-        ByteBuffer temp = currentBuffer;
-        currentBuffer = flushingBuffer;
-        flushingBuffer = temp;
-
-        // 2. 准备刷盘缓冲区
-        // flip()操作将limit设为position，position设为0，准备读取
-        flushingBuffer.flip();
-
-        // 3. 将数据写入磁盘
-        flushBuffer();
-
-        // 4. 重置刷盘缓冲区
-        // clear()操作将position设为0，limit设为capacity，准备下次写入
-        flushingBuffer.clear();
-    }
-
     private void flushBuffer() throws IOException {
-        if (fileChannel != null && fileChannel.isOpen() && flushingBuffer.hasRemaining()) {
-            fileChannel.write(flushingBuffer);
+        ByteBuffer buffer = bufferQueue.poll();
+        if (buffer != null && buffer.hasRemaining()) {
+            fileChannel.write(buffer);
             if (syncStrategy != AOFSyncStrategy.NO) {
                 fileChannel.force(false);
             }
@@ -253,8 +207,7 @@ public class AOFHandler {
             ByteBuffer buffer = ByteBuffer.allocate(8192);
             ByteBuf byteBuf = Unpooled.buffer();
 
-            int commandsLoaded = 0;
-            int commandsFailed = 0;
+            LoadStats stats = new LoadStats();
             int currentDbIndex = 0;
 
             while (channel.read(buffer) != -1) {
@@ -262,79 +215,91 @@ public class AOFHandler {
                 byteBuf.writeBytes(buffer);
                 buffer.clear();
 
-                try {
-                    while (byteBuf.isReadable()) {
-                        byteBuf.markReaderIndex();
-
-                        try {
-                            Resp command = Resp.decode(byteBuf);
-
-                            if (command instanceof RespArray) {
-                                RespArray array = (RespArray) command;
-                                Resp[] params = array.getArray();
-
-                                if (params.length > 0 && params[0] instanceof BulkString) {
-                                    String commandName = ((BulkString) params[0]).getContent()
-                                            .toUtf8String().toUpperCase();
-
-                                    try {
-                                        if (commandName.equals("SELECT") && params.length > 1 && params[1] instanceof BulkString) {
-                                            String dbIndexStr = ((BulkString) params[1]).getContent().toUtf8String();
-                                            try {
-                                                int dbIndex = Integer.parseInt(dbIndexStr);
-                                                if (dbIndex >= 0 && dbIndex < redisCore.getDbNum()) {
-                                                    currentDbIndex = dbIndex;
-                                                    redisCore.selectDB(currentDbIndex);
-                                                    logger.debug("切换到数据库: " + currentDbIndex);
-                                                } else {
-                                                    logger.warn("无效的数据库索引: " + dbIndex);
-                                                }
-                                            } catch (NumberFormatException e) {
-                                                logger.warn("无效的数据库索引格式: " + dbIndexStr);
-                                            }
-                                        } else {
-                                            // 对于非SELECT命令，确保在正确的数据库上执行
-                                            redisCore.selectDB(currentDbIndex);
-
-                                            CommandType commandType = CommandType.valueOf(commandName);
-                                            Command cmd = commandType.getSupplier().apply(redisCore);
-                                            cmd.setContext(params);
-                                            cmd.handle();
-                                            commandsLoaded++;
-
-                                            if (commandsLoaded % 10000 == 0) {
-                                                logger.info("已加载 " + commandsLoaded + " 条命令");
-                                            }
-                                        }
-                                    } catch (IllegalArgumentException e) {
-                                        logger.warn("未知命令: " + commandName);
-                                        commandsFailed++;
-                                    } catch (Exception e) {
-                                        logger.error("执行命令失败: " + commandName, e);
-                                        commandsFailed++;
-                                    }
-                                }
-                            }
-                        } catch (IllegalStateException e) {
-                            byteBuf.resetReaderIndex();
-                            break;
-                        }
-                    }
-
-                    byteBuf.discardReadBytes();
-
-                } catch (Exception e) {
-                    logger.error("处理AOF数据时出错", e);
-                    commandsFailed++;
-                }
+                currentDbIndex = processCommands(redisCore, byteBuf, stats, currentDbIndex);
             }
 
-            logger.info("AOF加载完成: 成功加载 " + commandsLoaded + " 条命令, 失败 " + commandsFailed + " 条");
+            logger.info("AOF加载完成: 成功加载 " + stats.commandsLoaded + " 条命令, 失败 " + stats.commandsFailed + " 条");
         } catch (IOException e) {
             logger.error("读取AOF文件时出错", e);
             throw e;
         }
     }
 
+    private int processCommands(RedisCore redisCore, ByteBuf byteBuf, LoadStats stats, int currentDbIndex) {
+        while (byteBuf.isReadable()) {
+            byteBuf.markReaderIndex();
+            try {
+                Resp command = Resp.decode(byteBuf);
+                if (command instanceof RespArray) {
+                    RespArray array = (RespArray) command;
+                    Resp[] params = array.getArray();
+                    if (params.length > 0 && params[0] instanceof BulkString) {
+                        String commandName = ((BulkString) params[0]).getContent().toUtf8String().toUpperCase();
+                        currentDbIndex = executeCommand(redisCore, params, commandName, stats, currentDbIndex);
+                    }
+                }
+            } catch (IllegalStateException e) {
+                byteBuf.resetReaderIndex();
+                break;
+            } catch (Exception e) {
+                logger.error("处理AOF数据时出错", e);
+                stats.commandsFailed++;
+            }
+        }
+        byteBuf.discardReadBytes();
+        return currentDbIndex;
+    }
 
+    private int executeCommand(RedisCore redisCore, Resp[] params, String commandName, LoadStats stats, int currentDbIndex) {
+        try {
+            if (commandName.equals("SELECT")) {
+                return handleSelectCommand(redisCore, params, currentDbIndex);
+            } else {
+                redisCore.selectDB(currentDbIndex);
+                CommandType commandType = CommandType.valueOf(commandName);
+                Command cmd = commandType.getSupplier().apply(redisCore);
+                cmd.setContext(params);
+                cmd.handle();
+                stats.commandsLoaded++;
+                logProgress(stats.commandsLoaded);
+            }
+        } catch (IllegalArgumentException e) {
+            logger.warn("未知命令: " + commandName);
+            stats.commandsFailed++;
+        } catch (Exception e) {
+            logger.error("执行命令失败: " + commandName, e);
+            stats.commandsFailed++;
+        }
+        return currentDbIndex;
+    }
+
+    private int handleSelectCommand(RedisCore redisCore, Resp[] params, int currentDbIndex) {
+        if (params.length > 1 && params[1] instanceof BulkString) {
+            String dbIndexStr = ((BulkString) params[1]).getContent().toUtf8String();
+            try {
+                int dbIndex = Integer.parseInt(dbIndexStr);
+                if (dbIndex >= 0 && dbIndex < redisCore.getDbNum()) {
+                    currentDbIndex = dbIndex;
+                    redisCore.selectDB(currentDbIndex);
+                    logger.debug("切换到数据库: " + currentDbIndex);
+                } else {
+                    logger.warn("无效的数据库索引: " + dbIndex);
+                }
+            } catch (NumberFormatException e) {
+                logger.warn("无效的数据库索引格式: " + dbIndexStr);
+            }
+        }
+        return currentDbIndex;
+    }
+
+    private void logProgress(int commandsLoaded) {
+        if (commandsLoaded % 10000 == 0) {
+            logger.info("已加载 " + commandsLoaded + " 条命令");
+        }
+    }
+
+    private static class LoadStats {
+        int commandsLoaded = 0;
+        int commandsFailed = 0;
+    }
 }

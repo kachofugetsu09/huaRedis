@@ -1,4 +1,4 @@
-package site.hnfy258.utiils;
+package site.hnfy258.utils;
 
 import org.apache.log4j.Logger;
 

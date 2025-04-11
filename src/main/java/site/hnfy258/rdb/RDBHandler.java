@@ -2,7 +2,7 @@ package site.hnfy258.rdb;
 
 import site.hnfy258.RedisCore;
 import site.hnfy258.datatype.*;
-import site.hnfy258.utiils.SkipList;
+import site.hnfy258.utils.SkipList;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;

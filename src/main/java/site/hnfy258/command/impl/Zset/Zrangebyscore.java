@@ -10,7 +10,7 @@ import site.hnfy258.protocal.BulkString;
 import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.RespArray;
 import site.hnfy258.protocal.RespInt;
-import site.hnfy258.utiils.SkipList;
+import site.hnfy258.utils.SkipList;
 
 import java.util.ArrayList;
 import java.util.List;
