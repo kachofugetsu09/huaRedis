@@ -50,4 +50,8 @@ public class RedisSet implements  RedisData{
     {
         return redisSet;
     }
+
+    public int size() {
+        return redisSet.size();
+    }
 }
