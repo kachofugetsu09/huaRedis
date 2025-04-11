@@ -7,10 +7,7 @@ import site.hnfy258.utiils.SkipList;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -124,6 +121,7 @@ public class RDBHandler {
                 .mapToInt(Map::size).sum() > 100) {  // 至少100个键被修改
             bgsave(false);
         }
+
     }
 
     // 记录数据变更，供自动保存使用
@@ -183,39 +181,17 @@ public class RDBHandler {
     }
 
     public CompletableFuture<Boolean> save() {
-        CompletableFuture<Boolean> result = new CompletableFuture<>();
-
-        if (isSaving) {
-            logger.warn("已有RDB保存任务在进行中，转为异步等待");
-            // 异步检查是否完成
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        if (!bgsave(true)) {
+            future.completeExceptionally(new IllegalStateException("已有保存任务运行"));
+        } else {
+            // 通过监听 isSaving 状态回调
             new Thread(() -> {
-                try {
-                    int maxWaitSeconds = 30;  // 最大等待30秒
-                    while (isSaving && maxWaitSeconds-- > 0) {
-                        Thread.sleep(1000);
-                    }
-                    if (!isSaving) {
-                        doSave();
-                        result.complete(true);
-                    } else {
-                        result.completeExceptionally(new TimeoutException("等待RDB保存超时"));
-                    }
-                } catch (Exception e) {
-                    result.completeExceptionally(e);
-                }
-            }, "save-async-waiter").start();
-            return result;
+                while (isSaving) Thread.yield();
+                future.complete(true);
+            }).start();
         }
-
-        // 无冲突时直接执行
-        try {
-            logger.info("开始同步保存RDB文件");
-            doSave();
-            result.complete(true);
-        } catch (IOException e) {
-            result.completeExceptionally(e);
-        }
-        return result;
+        return future;
     }
 
     public boolean bgsave(boolean fullSave) {
@@ -263,22 +239,16 @@ public class RDBHandler {
         for (int dbIndex = 0; dbIndex < redisCore.getDbNum(); dbIndex++) {
             Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
             if (!dbData.isEmpty()) {
-                // 分批处理：每批最多 1000 个键值对
+                // 写时复制：仅当数据被修改时才深拷贝
                 Map<BytesWrapper, RedisData> dbCopy = new HashMap<>();
-                int batchSize = 0;
-                for (Map.Entry<BytesWrapper, RedisData> entry : dbData.entrySet()) {
-                    RedisData value = entry.getValue();
-                    if (value.isImmutable()) {
-                        dbCopy.put(entry.getKey(), value); // 不可变对象直接引用
+                int finalDbIndex = dbIndex;
+                dbData.forEach((key, value) -> {
+                    if (lastModifiedMap.getOrDefault(finalDbIndex, Collections.emptyMap()).containsKey(key)) {
+                        dbCopy.put(key, value.deepCopy()); // 只拷贝被修改的数据
                     } else {
-                        dbCopy.put(entry.getKey(), value.deepCopy()); // 可变对象深拷贝
+                        dbCopy.put(key, value); // 未修改的直接引用
                     }
-
-                    // 每满 1000 个键值对，暂停一下（避免长时间阻塞）
-                    if (++batchSize % 1000 == 0) {
-                        Thread.yield(); // 让出CPU，减少对主线程的影响
-                    }
-                }
+                });
                 snapshot.put(dbIndex, dbCopy);
             }
         }
