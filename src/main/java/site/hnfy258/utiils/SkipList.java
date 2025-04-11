@@ -2,11 +2,9 @@ package site.hnfy258.utiils;
 
 import org.apache.log4j.Logger;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
+import java.util.*;
 
-public class SkipList {
+public class SkipList implements Cloneable{
     private static final int MAX_LEVEL = 32;
     private static final double P = 0.25;
     private Node head;
@@ -20,12 +18,47 @@ public class SkipList {
         return size;
     }
 
+    public SkipList deepCopy() {
+        try {
+            SkipList clone = (SkipList) super.clone();
+            clone.head = new Node(Double.NEGATIVE_INFINITY, null);
+            clone.random = new Random();
+            clone.level = this.level;
+            clone.size = this.size;
+
+            // 先创建所有节点的副本
+            Map<Node, Node> nodeMap = new HashMap<>();
+            Node current = this.head.next[0];
+            while (current != null) {
+                Node newNode = new Node(current.score, current.member);
+                nodeMap.put(current, newNode);
+                current = current.next[0];
+            }
+
+            // 设置链接关系
+            for (int i = 0; i < level; i++) {
+                current = this.head.next[i];
+                Node prev = clone.head;
+                while (current != null) {
+                    Node newNode = nodeMap.get(current);
+                    prev.next[i] = newNode;
+                    prev = newNode;
+                    current = current.next[i];
+                }
+            }
+
+            return clone;
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
 
-    public static class Node{
+    public static class Node {
         public double score;
         public String member;
         Node[] next;
+
         public Node(double score, String member) {
             this.score = score;
             this.member = member;

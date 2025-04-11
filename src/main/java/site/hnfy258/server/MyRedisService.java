@@ -22,8 +22,9 @@ import java.io.IOException;
 public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
-    // 通过修改此标志来开启或关闭AOF功能
+    // 通过修改这些标志来开启或关闭AOF和RDB功能
     private static final boolean ENABLE_AOF = false;
+    private static final boolean ENABLE_RDB = true; // 新增RDB开关
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;
@@ -49,26 +50,42 @@ public class MyRedisService implements RedisService {
         this.channelOption = new DefaultChannelSelectStrategy().select();
         this.commandExecutor = new DefaultEventExecutorGroup(1,
                 new DefaultThreadFactory("redis-cmd"));
-        this.rdbHandler = new RDBHandler(redisCore);
+
+        // 根据配置决定是否初始化RDB处理器
+        if (ENABLE_RDB) {
+            this.rdbHandler = new RDBHandler(redisCore);
+            ((RedisCoreImpl) redisCore).setRDBHandler(this.rdbHandler);
+            //logger.info("RDB功能已启用");
+        } else {
+            this.rdbHandler = null;
+            //logger.info("RDB功能已禁用");
+        }
 
         // 根据配置决定是否初始化AOF处理器
         if (ENABLE_AOF) {
             this.aofHandler = new AOFHandler("redis.aof");
             this.aofHandler.setSyncStrategy(AOFHandler.AOFSyncStrategy.EVERYSEC);
+            //logger.info("AOF功能已启用");
         } else {
             this.aofHandler = null;
             //logger.info("AOF功能已禁用");
         }
     }
+
     @Override
     public void start() {
         this.bossGroup = channelOption.boss();
         this.workerGroup = channelOption.selectors();
 
         try {
-            this.rdbHandler.load();
+            // 只有在启用RDB时才初始化RDB处理器
+            if (ENABLE_RDB && rdbHandler != null) {
+                this.rdbHandler.initialize();
+                //logger.info("RDB持久化已初始化");
+            }
+
             // 只有在启用AOF时才启动AOF处理器
-            if (ENABLE_AOF) {
+            if (ENABLE_AOF && aofHandler != null) {
                 this.aofHandler.start();
                 this.aofHandler.load(redisCore);
                 //logger.info("AOF持久化已启用");
@@ -89,7 +106,7 @@ public class MyRedisService implements RedisService {
                             ChannelPipeline pipeline = ch.pipeline();
                             pipeline.addLast(new MyDecoder());
                             pipeline.addLast(new MyResponseEncoder());
-                            pipeline.addLast(commandExecutor, new MyCommandHandler(redisCore, aofHandler));
+                            pipeline.addLast(commandExecutor, new MyCommandHandler(redisCore, aofHandler, rdbHandler));
                         }
                     });
 
@@ -116,13 +133,20 @@ public class MyRedisService implements RedisService {
     @Override
     public void close() {
         //logger.info("开始关闭Redis服务...");
-        try{
-            this.rdbHandler.save();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+
+        // 关闭RDB处理器
+        if (ENABLE_RDB && rdbHandler != null) {
+            try {
+                //logger.info("正在执行RDB保存...");
+                rdbHandler.save();
+                rdbHandler.shutdown();
+                //logger.info("RDB保存完成并关闭");
+            } catch (IOException e) {
+                logger.error("RDB保存失败", e);
+            }
         }
 
-        // 首先关闭AOF处理器，确保所有命令都已写入
+        // 关闭AOF处理器
         if (ENABLE_AOF && aofHandler != null) {
             try {
                 //logger.info("正在关闭AOF处理器...");
@@ -133,7 +157,7 @@ public class MyRedisService implements RedisService {
             }
         }
 
-        // 然后关闭网络资源
+        // 关闭网络资源
         if (serverChannel != null) {
             //logger.info("正在关闭服务器通道...");
             serverChannel.close().syncUninterruptibly();

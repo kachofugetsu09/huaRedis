@@ -10,6 +10,7 @@
     import site.hnfy258.protocal.*;
     import site.hnfy258.datatype.BytesWrapper;
     import site.hnfy258.aof.AOFHandler;
+    import site.hnfy258.rdb.RDBHandler;
 
     import java.util.EnumSet;
     import java.util.Set;
@@ -19,6 +20,7 @@
         private static final Logger logger = Logger.getLogger(MyCommandHandler.class);
         private final RedisCoreImpl redisCore;
         private final AOFHandler aofHandler; // 可能为null
+        private final RDBHandler rdbHandler;
 
         // 使用EnumSet提高查找效率
         private static final Set<CommandType> WRITE_COMMANDS = EnumSet.of(
@@ -38,9 +40,10 @@
         // 记录最后一次日志时间，用于限制日志频率
         private static volatile long lastLogTime = System.currentTimeMillis();
 
-        public MyCommandHandler(RedisCore redisCore, AOFHandler aofHandler) {
+        public MyCommandHandler(RedisCore redisCore, AOFHandler aofHandler,RDBHandler rdbHandler) {
             this.redisCore = (RedisCoreImpl) redisCore;
             this.aofHandler = aofHandler; // 可能为null，表示AOF已禁用
+            this.rdbHandler = rdbHandler;
         }
 
         @Override
@@ -83,6 +86,10 @@
                     cmd.setContext(array);
 
                     Resp response = cmd.handle();
+
+                    if (rdbHandler != null && WRITE_COMMANDS.contains(commandType)) {
+                        rdbHandler.notifyDataChanged(redisCore.getCurrentDB().getId(), ((BulkString) array[1]).getContent());
+                    }
 
                     // 如果AOF已启用且是写命令，写入AOF
                     if (aofHandler != null && WRITE_COMMANDS.contains(commandType)) {

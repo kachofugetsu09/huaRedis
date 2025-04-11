@@ -3,7 +3,7 @@ package site.hnfy258.datatype;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class RedisList implements  RedisData{
+public class RedisList implements  RedisData,Cloneable{
     private volatile long timeout;
     private final LinkedList<BytesWrapper> list = new LinkedList<>();
 
@@ -19,6 +19,18 @@ public class RedisList implements  RedisData{
     @Override
     public void setTimeout(long timeout) {
         this.timeout = timeout;
+    }
+
+    @Override
+    public RedisData deepCopy() {
+        try {
+            RedisList clone = (RedisList) super.clone();
+            clone.list.addAll(list);
+            return clone;
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+         }
+
     }
 
     public long getTimeout() {

@@ -1,6 +1,6 @@
 package site.hnfy258.datatype;
 
-public class RedisString implements RedisData {
+public class RedisString implements RedisData,Cloneable {
     private volatile long timeout;
     private BytesWrapper value;
 
@@ -17,6 +17,17 @@ public class RedisString implements RedisData {
     @Override
     public void setTimeout(long timeout) {
         this.timeout = timeout;
+    }
+
+    @Override
+    public RedisData deepCopy() {
+        try{
+            RedisString clone = (RedisString) super.clone();
+            clone.value = value.deepCopy();
+            return clone;
+        }catch(CloneNotSupportedException e){
+            throw new RuntimeException(e);
+        }
     }
 
     public BytesWrapper getValue() {

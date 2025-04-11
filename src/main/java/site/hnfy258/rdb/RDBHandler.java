@@ -6,29 +6,313 @@ import site.hnfy258.utiils.SkipList;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.apache.log4j.Logger;
 
 public class RDBHandler {
     private static final Logger logger = Logger.getLogger(RDBHandler.class);
     private final RedisCore redisCore;
+    private final ScheduledExecutorService scheduler;
+    private final ExecutorService saveExecutor;
+    private volatile boolean isSaving = false;
+    private final List<SavePoint> savePoints = new ArrayList<>();
+
+    private static final String FULL_RDB_FILE_NAME = RDBConstants.RDB_FILE_NAME;
+    private static final String INCREMENTAL_RDB_FILE_NAME = RDBConstants.RDB_FILE_NAME + ".inc";
+    private long lastFullSaveTime = 0;
+    private final Map<Integer, Map<BytesWrapper, Long>> lastModifiedMap = new ConcurrentHashMap<>();
+
+    public boolean isSaving() {
+        return isSaving;
+    }
+
+
+    // 定义RDB保存条件
+    public static class SavePoint {
+        final int seconds;
+        final int changes;
+
+        public SavePoint(int seconds, int changes) {
+            this.seconds = seconds;
+            this.changes = changes;
+        }
+    }
 
     public RDBHandler(RedisCore redisCore) {
         this.redisCore = redisCore;
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "rdb-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
+        this.saveExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "rdb-saver");
+            t.setDaemon(true);
+            return t;
+        });
+
+        // 添加默认的保存点配置，类似Redis的默认配置
+        savePoints.add(new SavePoint(900, 1));   // 900秒内有1次修改
+        savePoints.add(new SavePoint(300, 10));  // 300秒内有10次修改
+        savePoints.add(new SavePoint(60, 10000)); // 60秒内有10000次修改
     }
 
+    public void initialize() {
+        try {
+            load();
+            startAutoSave();
+        } catch (IOException e) {
+            logger.error("初始化RDB处理器失败", e);
+        }
+    }
+
+    private void startAutoSave() {
+        // 每秒检查一次是否需要触发保存
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                checkSaveConditions();
+            } catch (Exception e) {
+                logger.error("自动保存检查失败", e);
+            }
+        }, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private final Map<SavePoint, Long> lastSaveTimeMap = new ConcurrentHashMap<>();
+    private final Map<SavePoint, AtomicInteger> changeCountMap = new ConcurrentHashMap<>();
+
+    private void checkSaveConditions() {
+        if (isSaving) return;
+
+        long now = System.currentTimeMillis() / 1000;
+        boolean needFullSave = false;
+        SavePoint triggeredPoint = null;
+
+        // 检查所有保存点条件
+        for (SavePoint sp : savePoints) {
+            long lastSaveTime = lastSaveTimeMap.getOrDefault(sp, 0L);
+            AtomicInteger changes = changeCountMap.computeIfAbsent(sp, k -> new AtomicInteger(0));
+
+            if (now - lastSaveTime >= sp.seconds && changes.get() >= sp.changes) {
+                needFullSave = true;
+                triggeredPoint = sp;
+                break;
+            }
+        }
+
+        // 每小时强制全量保存
+        boolean hourlySave = (now - lastFullSaveTime / 1000) >= 3600;
+
+        if (needFullSave || hourlySave) {
+            if (triggeredPoint != null) {
+                // 重置触发点的计数器和时间戳
+                changeCountMap.get(triggeredPoint).set(0);
+                lastSaveTimeMap.put(triggeredPoint, now);
+            }
+            if (hourlySave) {
+                lastFullSaveTime = System.currentTimeMillis();
+            }
+            bgsave(true);
+        } else if (!lastModifiedMap.isEmpty()) {
+            // 增量保存
+            bgsave(false);
+        }
+    }
+
+    // 记录数据变更，供自动保存使用
+    public void notifyDataChanged(int dbIndex, BytesWrapper key) {
+        for (SavePoint sp : savePoints) {
+            AtomicInteger counter = changeCountMap.computeIfAbsent(sp, k -> new AtomicInteger(0));
+            counter.incrementAndGet();
+        }
+        lastModifiedMap.computeIfAbsent(dbIndex, k -> new ConcurrentHashMap<>())
+                .put(key, System.currentTimeMillis());
+    }
+
+    private void doIncrementalSave() throws IOException {
+        File tempFile = new File(INCREMENTAL_RDB_FILE_NAME + ".tmp");
+
+        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(tempFile))) {
+            writeRDBHeader(dos);
+
+            for (Map.Entry<Integer, Map<BytesWrapper, Long>> dbEntry : lastModifiedMap.entrySet()) {
+                int dbIndex = dbEntry.getKey();
+                Map<BytesWrapper, Long> modifiedKeys = dbEntry.getValue();
+
+                if (!modifiedKeys.isEmpty()) {
+                    writeSelectDB(dos, dbIndex);
+                    Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
+
+                    for (Map.Entry<BytesWrapper, Long> entry : modifiedKeys.entrySet()) {
+                        BytesWrapper key = entry.getKey();
+                        RedisData value = dbData.get(key);
+                        if (value != null) {
+                            saveEntry(dos, key, value);
+                        }
+                    }
+                }
+            }
+
+            writeRDBFooter(dos);
+        }
+
+        // 原子性地替换文件
+        File incRdbFile = new File(INCREMENTAL_RDB_FILE_NAME);
+        if (!tempFile.renameTo(incRdbFile)) {
+            // 如果重命名失败，尝试复制内容并删除临时文件
+            try (InputStream in = new FileInputStream(tempFile);
+                 OutputStream out = new FileOutputStream(incRdbFile)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                }
+            }
+            tempFile.delete();
+        }
+
+        // 清除已保存的增量数据
+        lastModifiedMap.clear();
+    }
+
+    // 阻塞式保存，主要用于服务关闭时
     public void save() throws IOException {
-        logger.info("开始保存RDB文件");
-        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(RDBConstants.RDB_FILE_NAME))) {
+        if (isSaving) {
+            logger.warn("已有RDB保存任务在进行中，等待完成...");
+            try {
+                // 等待当前保存任务完成
+                while (isSaving) {
+                    Thread.sleep(100);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.error("等待RDB保存完成被中断", e);
+            }
+        }
+
+        logger.info("开始同步保存RDB文件");
+        doSave();
+        logger.info("RDB文件同步保存完成");
+    }
+
+    // 非阻塞式保存，后台执行
+    public boolean bgsave(boolean fullSave) {
+        if (isSaving) {
+            logger.warn("已有RDB保存任务在进行中，忽略此次请求");
+            return false;
+        }
+
+        isSaving = true;
+        saveExecutor.submit(() -> {
+            try {
+                if (fullSave) {
+                    logger.info("开始后台全量保存RDB文件");
+                    Map<Integer, Map<BytesWrapper, RedisData>> snapshot = createSnapshot();
+                    doSaveWithSnapshot(snapshot);
+                    lastFullSaveTime = System.currentTimeMillis();
+                    logger.info("RDB文件全量后台保存完成");
+                } else {
+                    logger.info("开始后台增量保存RDB文件");
+                    doIncrementalSave();
+                    logger.info("RDB文件增量后台保存完成");
+                }
+            } catch (Exception e) {
+                logger.error("后台保存RDB文件失败", e);
+            } finally {
+                isSaving = false;
+            }
+        });
+
+        return true;
+    }
+
+    // 创建数据快照
+    private Map<Integer, Map<BytesWrapper, RedisData>> createSnapshot() {
+        Map<Integer, Map<BytesWrapper, RedisData>> snapshot = new HashMap<>();
+
+        for (int dbIndex = 0; dbIndex < redisCore.getDbNum(); dbIndex++) {
+            Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
+            if (!dbData.isEmpty()) {
+                // 创建数据的深拷贝
+                Map<BytesWrapper, RedisData> dbCopy = new HashMap<>();
+                for (Map.Entry<BytesWrapper, RedisData> entry : dbData.entrySet()) {
+                    // 注意：这里假设RedisData实现了深拷贝方法
+                    // 实际实现中需要确保每种数据类型都正确实现深拷贝
+                    dbCopy.put(entry.getKey(), entry.getValue().deepCopy());
+                }
+                snapshot.put(dbIndex, dbCopy);
+            }
+        }
+
+        return snapshot;
+    }
+
+    // 使用快照进行保存
+    private void doSaveWithSnapshot(Map<Integer, Map<BytesWrapper, RedisData>> snapshot) throws IOException {
+        File tempFile = new File(RDBConstants.RDB_FILE_NAME + ".tmp");
+
+        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(tempFile))) {
+            writeRDBHeader(dos);
+
+            // 保存所有数据库
+            for (Map.Entry<Integer, Map<BytesWrapper, RedisData>> entry : snapshot.entrySet()) {
+                int dbIndex = entry.getKey();
+                Map<BytesWrapper, RedisData> dbData = entry.getValue();
+
+                if (!dbData.isEmpty()) {
+                    writeSelectDB(dos, dbIndex);
+                    saveDatabase(dos, dbData);
+                }
+            }
+
+            writeRDBFooter(dos);
+        }
+
+        // 原子性地替换文件
+        File rdbFile = new File(RDBConstants.RDB_FILE_NAME);
+        if (!tempFile.renameTo(rdbFile)) {
+            // 如果重命名失败，尝试复制内容并删除临时文件
+            try (InputStream in = new FileInputStream(tempFile);
+                 OutputStream out = new FileOutputStream(rdbFile)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                }
+            }
+            tempFile.delete();
+        }
+    }
+
+    // 直接保存当前数据，用于同步保存
+    private void doSave() throws IOException {
+        File tempFile = new File(RDBConstants.RDB_FILE_NAME + ".tmp");
+
+        try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(tempFile))) {
             writeRDBHeader(dos);
             saveAllDatabases(dos);
             writeRDBFooter(dos);
-            logger.info("RDB文件保存成功");
-        } catch (IOException e) {
-            logger.error("保存RDB文件时发生错误", e);
-            throw e;
+        }
+
+        // 原子性地替换文件
+        File rdbFile = new File(RDBConstants.RDB_FILE_NAME);
+        if (!tempFile.renameTo(rdbFile)) {
+            // 如果重命名失败，尝试复制内容并删除临时文件
+            try (InputStream in = new FileInputStream(tempFile);
+                 OutputStream out = new FileOutputStream(rdbFile)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, bytesRead);
+                }
+            }
+            tempFile.delete();
         }
     }
 
@@ -134,22 +418,34 @@ public class RDBHandler {
     }
 
     public void load() throws IOException {
-        File file = new File(RDBConstants.RDB_FILE_NAME);
-        if (!file.exists() || file.length() == 0) {
-            logger.info("RDB文件不存在或为空，跳过加载过程");
+        File fullFile = new File(FULL_RDB_FILE_NAME);
+        File incFile = new File(INCREMENTAL_RDB_FILE_NAME);
+
+        if (!fullFile.exists() && !incFile.exists()) {
+            logger.info("RDB文件不存在，跳过加载过程");
             return;
         }
 
         logger.info("开始加载RDB文件");
+        clearAllDatabases();
+
+        if (fullFile.exists()) {
+            loadFile(fullFile);
+        }
+
+        if (incFile.exists()) {
+            loadFile(incFile);
+        }
+
+        logger.info("RDB文件加载成功");
+    }
+
+    private void loadFile(File file) throws IOException {
         try (DataInputStream dis = new DataInputStream(new FileInputStream(file))) {
             if (!validateRDBHeader(dis)) {
                 return;
             }
-
-            clearAllDatabases();
             loadData(dis);
-
-            logger.info("RDB文件加载成功");
         } catch (EOFException e) {
             logger.error("RDB文件读取时遇到意外的文件结束", e);
         } catch (IOException e) {
@@ -157,7 +453,6 @@ public class RDBHandler {
             throw e;
         }
     }
-
     private boolean validateRDBHeader(DataInputStream dis) throws IOException {
         byte[] header = new byte[9];
         int bytesRead = dis.read(header);
@@ -292,5 +587,19 @@ public class RDBHandler {
 
     private long readLength(DataInputStream dis) throws IOException {
         return dis.readInt() & 0xFFFFFFFFL;
+    }
+
+    public void shutdown() {
+        scheduler.shutdown();
+        saveExecutor.shutdown();
+        try {
+            // 等待任务完成
+            if (!saveExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                saveExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            saveExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }

@@ -5,7 +5,7 @@ import org.apache.log4j.Logger;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListSet;
 
-public class RedisSet implements  RedisData{
+public class RedisSet implements  RedisData,Cloneable{
     private volatile long timeout = -1;
     private final Set<BytesWrapper> redisSet = new ConcurrentSkipListSet<>();
     Logger logger = Logger.getLogger(RedisSet.class);
@@ -17,6 +17,17 @@ public class RedisSet implements  RedisData{
     @Override
     public void setTimeout(long timeout) {
         this.timeout = timeout;
+    }
+
+    @Override
+    public RedisData deepCopy() {
+        try{
+            RedisSet clone = (RedisSet) super.clone();
+            clone.redisSet.addAll(redisSet);
+            return clone;
+        }catch(CloneNotSupportedException e){
+            throw new RuntimeException(e);
+        }
     }
 
     public int sadd(List<BytesWrapper> members){

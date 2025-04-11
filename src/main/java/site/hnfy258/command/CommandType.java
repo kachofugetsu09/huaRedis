@@ -50,6 +50,8 @@ public enum CommandType {
     SELECT(Select::new),
     SCAN(Scan::new),
     TYPE(Type::new),
+    SAVE(Save::new),
+    BGSAVE(Bgsave::new),
     GET(Get::new);
 
 

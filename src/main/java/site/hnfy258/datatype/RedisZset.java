@@ -4,7 +4,7 @@ import site.hnfy258.utiils.SkipList;
 
 import java.util.List;
 
-public class RedisZset implements  RedisData{
+public class RedisZset implements  RedisData,Cloneable{
     private volatile long timeout;
     private SkipList skipList;
 
@@ -22,6 +22,17 @@ public class RedisZset implements  RedisData{
     @Override
     public void setTimeout(long timeout) {
         this.timeout = timeout;
+    }
+
+    @Override
+    public RedisData deepCopy() {
+        try{
+            RedisZset clone = (RedisZset) super.clone();
+            clone.skipList = skipList.deepCopy();
+            return clone;
+        }catch(CloneNotSupportedException e){
+            throw new RuntimeException(e);
+        }
     }
 
     public boolean add(double score, String member) {
