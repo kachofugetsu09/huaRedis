@@ -15,6 +15,7 @@ import site.hnfy258.coder.MyResponseEncoder;
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
 import site.hnfy258.aof.AOFHandler;
+import site.hnfy258.rdb.RDBHandler;
 
 import java.io.IOException;
 
@@ -22,7 +23,7 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改此标志来开启或关闭AOF功能
-    private static final boolean ENABLE_AOF = true;
+    private static final boolean ENABLE_AOF = false;
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;
@@ -32,6 +33,7 @@ public class MyRedisService implements RedisService {
     private final LocalChannelOption channelOption;
     private final EventExecutorGroup commandExecutor;
     private final AOFHandler aofHandler;
+    private final RDBHandler rdbHandler;
 
     private Channel serverChannel;
     private EventLoopGroup bossGroup;
@@ -47,6 +49,7 @@ public class MyRedisService implements RedisService {
         this.channelOption = new DefaultChannelSelectStrategy().select();
         this.commandExecutor = new DefaultEventExecutorGroup(1,
                 new DefaultThreadFactory("redis-cmd"));
+        this.rdbHandler = new RDBHandler(redisCore);
 
         // 根据配置决定是否初始化AOF处理器
         if (ENABLE_AOF) {
@@ -57,14 +60,13 @@ public class MyRedisService implements RedisService {
             //logger.info("AOF功能已禁用");
         }
     }
-
-    // 其余方法保持不变...
     @Override
     public void start() {
         this.bossGroup = channelOption.boss();
         this.workerGroup = channelOption.selectors();
 
         try {
+            this.rdbHandler.load();
             // 只有在启用AOF时才启动AOF处理器
             if (ENABLE_AOF) {
                 this.aofHandler.start();
@@ -114,6 +116,11 @@ public class MyRedisService implements RedisService {
     @Override
     public void close() {
         //logger.info("开始关闭Redis服务...");
+        try{
+            this.rdbHandler.save();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
 
         // 首先关闭AOF处理器，确保所有命令都已写入
         if (ENABLE_AOF && aofHandler != null) {

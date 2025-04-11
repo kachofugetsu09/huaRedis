@@ -1,10 +1,13 @@
 package site.hnfy258;
 
  import io.netty.channel.Channel;
+ import site.hnfy258.database.RedisDB;
  import site.hnfy258.datatype.BytesWrapper;
  import site.hnfy258.datatype.RedisData;
+ import site.hnfy258.datatype.RedisString;
 
  import java.util.List;
+ import java.util.Map;
  import java.util.Set;
  
  public interface RedisCore
@@ -23,7 +26,15 @@ package site.hnfy258;
  
      void cleanAll();
 
+     RedisDB getCurrentDB();
+
      void selectDB(int index);
 
      int getDbNum();
+
+     Map<BytesWrapper, RedisData> getAll();
+
+     void setDB(int currentDb, BytesWrapper bytesWrapper, RedisString redisString);
+
+     Map<BytesWrapper, RedisData> getDBData(int dbIndex);
  }

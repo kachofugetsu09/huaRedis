@@ -3,6 +3,7 @@ package site.hnfy258.database;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
 
+import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,5 +58,9 @@ public class RedisDB {
 
     public int size() {
         return data.size();
+    }
+
+    public Map<BytesWrapper, RedisData> getAll() {
+        return data;
     }
 }

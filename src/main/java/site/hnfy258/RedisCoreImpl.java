@@ -4,11 +4,9 @@ import io.netty.channel.Channel;
 import site.hnfy258.database.RedisDB;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
+import site.hnfy258.datatype.RedisString;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class RedisCoreImpl implements RedisCore {
@@ -28,7 +26,7 @@ public class RedisCoreImpl implements RedisCore {
         this.clients = new ConcurrentHashMap<>();
         this.clientNames = new ConcurrentHashMap<>();
     }
-
+    @Override
     public RedisDB getCurrentDB() {
         return databases.get(currentDB.get());
     }
@@ -104,10 +102,34 @@ public class RedisCoreImpl implements RedisCore {
         return dbNum;
     }
 
+    @Override
+    public Map<BytesWrapper, RedisData> getAll() {
+        Map<BytesWrapper, RedisData> map = new HashMap<>();
+        for (RedisDB redisDB : databases) {
+            for (BytesWrapper key : redisDB.keys()) {
+                RedisData redisData = redisDB.get(key);
+                if (redisData != null) {
+                    map.put(new BytesWrapper(key.getBytes()), redisData);
+                }
+            }
+        }
+        return map;
+    }
+
+    @Override
+    public void setDB(int currentDb, BytesWrapper bytesWrapper, RedisString redisString) {
+        databases.get(currentDb).put(bytesWrapper, redisString);
+    }
+
     public void disconnectClient(Channel channel) {
         BytesWrapper connectionName = clientNames.remove(channel);
         if (connectionName != null) {
             clients.remove(connectionName);
         }
     }
+
+    public Map<BytesWrapper, RedisData> getDBData(int dbIndex) {
+        return databases.get(dbIndex).getAll();
+    }
+
 }
