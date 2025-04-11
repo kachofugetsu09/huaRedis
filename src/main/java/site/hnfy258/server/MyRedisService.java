@@ -136,14 +136,18 @@ public class MyRedisService implements RedisService {
 
         // 关闭RDB处理器
         if (ENABLE_RDB && rdbHandler != null) {
-            try {
                 //logger.info("正在执行RDB保存...");
-                rdbHandler.save();
+                rdbHandler.save().thenAccept(success -> {
+                    if (success) {
+                        logger.info("RDB保存成功");
+                    }
+                }).exceptionally(e -> {
+                    logger.error("RDB保存失败", e);
+                    return null;
+                });
                 rdbHandler.shutdown();
                 //logger.info("RDB保存完成并关闭");
-            } catch (IOException e) {
-                logger.error("RDB保存失败", e);
-            }
+
         }
 
         // 关闭AOF处理器

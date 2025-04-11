@@ -35,6 +35,11 @@ public class RedisZset implements  RedisData,Cloneable{
         }
     }
 
+    @Override
+    public boolean isImmutable() {
+        return false;
+    }
+
     public boolean add(double score, String member) {
         return skipList.insert(score, member);
     }

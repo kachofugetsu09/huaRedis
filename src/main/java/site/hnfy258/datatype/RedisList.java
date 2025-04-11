@@ -33,6 +33,11 @@ public class RedisList implements  RedisData,Cloneable{
 
     }
 
+    @Override
+    public boolean isImmutable() {
+        return false;
+    }
+
     public long getTimeout() {
         return timeout;
     }

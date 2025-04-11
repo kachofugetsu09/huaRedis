@@ -30,6 +30,11 @@ public class RedisSet implements  RedisData,Cloneable{
         }
     }
 
+    @Override
+    public boolean isImmutable() {
+        return false;
+    }
+
     public int sadd(List<BytesWrapper> members){
         //logger.info("Adding members to set: " + members);
         int addedCount = (int)members.stream().filter(redisSet::add).count();

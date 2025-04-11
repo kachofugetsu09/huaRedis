@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import org.apache.log4j.Logger;
 
@@ -119,8 +120,8 @@ public class RDBHandler {
                 lastFullSaveTime = System.currentTimeMillis();
             }
             bgsave(true);
-        } else if (!lastModifiedMap.isEmpty()) {
-            // 增量保存
+        } if (!lastModifiedMap.isEmpty() && lastModifiedMap.values().stream()
+                .mapToInt(Map::size).sum() > 100) {  // 至少100个键被修改
             bgsave(false);
         }
     }
@@ -181,27 +182,42 @@ public class RDBHandler {
         lastModifiedMap.clear();
     }
 
-    // 阻塞式保存，主要用于服务关闭时
-    public void save() throws IOException {
+    public CompletableFuture<Boolean> save() {
+        CompletableFuture<Boolean> result = new CompletableFuture<>();
+
         if (isSaving) {
-            logger.warn("已有RDB保存任务在进行中，等待完成...");
-            try {
-                // 等待当前保存任务完成
-                while (isSaving) {
-                    Thread.sleep(100);
+            logger.warn("已有RDB保存任务在进行中，转为异步等待");
+            // 异步检查是否完成
+            new Thread(() -> {
+                try {
+                    int maxWaitSeconds = 30;  // 最大等待30秒
+                    while (isSaving && maxWaitSeconds-- > 0) {
+                        Thread.sleep(1000);
+                    }
+                    if (!isSaving) {
+                        doSave();
+                        result.complete(true);
+                    } else {
+                        result.completeExceptionally(new TimeoutException("等待RDB保存超时"));
+                    }
+                } catch (Exception e) {
+                    result.completeExceptionally(e);
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                logger.error("等待RDB保存完成被中断", e);
-            }
+            }, "save-async-waiter").start();
+            return result;
         }
 
-        logger.info("开始同步保存RDB文件");
-        doSave();
-        logger.info("RDB文件同步保存完成");
+        // 无冲突时直接执行
+        try {
+            logger.info("开始同步保存RDB文件");
+            doSave();
+            result.complete(true);
+        } catch (IOException e) {
+            result.completeExceptionally(e);
+        }
+        return result;
     }
 
-    // 非阻塞式保存，后台执行
     public boolean bgsave(boolean fullSave) {
         if (isSaving) {
             logger.warn("已有RDB保存任务在进行中，忽略此次请求");
@@ -212,11 +228,12 @@ public class RDBHandler {
         saveExecutor.submit(() -> {
             try {
                 if (fullSave) {
-                    logger.info("开始后台全量保存RDB文件");
-                    Map<Integer, Map<BytesWrapper, RedisData>> snapshot = createSnapshot();
+                    Map<Integer, Map<BytesWrapper, RedisData>> snapshot = new HashMap<>();
+                    for (Integer dbIndex : lastModifiedMap.keySet()) {
+                        Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
+                        snapshot.put(dbIndex, filterUnmodifiedData(dbData, lastModifiedMap.get(dbIndex)));
+                    }
                     doSaveWithSnapshot(snapshot);
-                    lastFullSaveTime = System.currentTimeMillis();
-                    logger.info("RDB文件全量后台保存完成");
                 } else {
                     logger.info("开始后台增量保存RDB文件");
                     doIncrementalSave();
@@ -232,24 +249,39 @@ public class RDBHandler {
         return true;
     }
 
+    private Map<BytesWrapper, RedisData> filterUnmodifiedData(
+            Map<BytesWrapper, RedisData> dbData,
+            Map<BytesWrapper, Long> modifiedKeys) {
+
+        return dbData.entrySet().stream()
+                .filter(e -> modifiedKeys.containsKey(e.getKey()))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
     // 创建数据快照
     private Map<Integer, Map<BytesWrapper, RedisData>> createSnapshot() {
         Map<Integer, Map<BytesWrapper, RedisData>> snapshot = new HashMap<>();
-
         for (int dbIndex = 0; dbIndex < redisCore.getDbNum(); dbIndex++) {
             Map<BytesWrapper, RedisData> dbData = redisCore.getDBData(dbIndex);
             if (!dbData.isEmpty()) {
-                // 创建数据的深拷贝
+                // 分批处理：每批最多 1000 个键值对
                 Map<BytesWrapper, RedisData> dbCopy = new HashMap<>();
+                int batchSize = 0;
                 for (Map.Entry<BytesWrapper, RedisData> entry : dbData.entrySet()) {
-                    // 注意：这里假设RedisData实现了深拷贝方法
-                    // 实际实现中需要确保每种数据类型都正确实现深拷贝
-                    dbCopy.put(entry.getKey(), entry.getValue().deepCopy());
+                    RedisData value = entry.getValue();
+                    if (value.isImmutable()) {
+                        dbCopy.put(entry.getKey(), value); // 不可变对象直接引用
+                    } else {
+                        dbCopy.put(entry.getKey(), value.deepCopy()); // 可变对象深拷贝
+                    }
+
+                    // 每满 1000 个键值对，暂停一下（避免长时间阻塞）
+                    if (++batchSize % 1000 == 0) {
+                        Thread.yield(); // 让出CPU，减少对主线程的影响
+                    }
                 }
                 snapshot.put(dbIndex, dbCopy);
             }
         }
-
         return snapshot;
     }
 

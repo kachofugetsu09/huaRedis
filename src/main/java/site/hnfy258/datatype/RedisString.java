@@ -30,6 +30,11 @@ public class RedisString implements RedisData,Cloneable {
         }
     }
 
+    @Override
+    public boolean isImmutable() {
+        return true;
+    }
+
     public BytesWrapper getValue() {
         return value;
     }

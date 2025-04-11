@@ -30,6 +30,11 @@ public class RedisHash implements  RedisData,Cloneable{
         }
     }
 
+    @Override
+    public boolean isImmutable() {
+        return false;
+    }
+
 
     public int put(BytesWrapper field,BytesWrapper value){
         return redisHashMap.put(field,value)==null?1:0;

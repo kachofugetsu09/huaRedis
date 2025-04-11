@@ -5,4 +5,7 @@ public interface RedisData {
     void setTimeout(long timeout);
 
     RedisData deepCopy();
+
+    boolean isImmutable();
+
 }
