@@ -58,23 +58,27 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
             }
 
             if (closed && currentBuffer.position() == 0) {
-                return null; // 或者抛出异常
+                return null;
             }
 
-            // 交换缓冲区
-            ByteBuffer temp = flushingBuffer;
-            flushingBuffer = currentBuffer;
-            currentBuffer = temp;
-
-            // 准备返回的缓冲区
-            flushingBuffer.flip();
-            currentBuffer.clear();
+            swapArea();
 
             notFull.signal();
             return flushingBuffer;
         } finally {
             lock.unlock();
         }
+    }
+
+    private void swapArea() {
+        // 交换缓冲区
+        ByteBuffer temp = flushingBuffer;
+        flushingBuffer = currentBuffer;
+        currentBuffer = temp;
+
+        // 准备返回的缓冲区
+        flushingBuffer.flip();
+        currentBuffer.clear();
     }
 
     public void close() {
@@ -142,12 +146,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
             }
 
             // 交换缓冲区
-            ByteBuffer temp = flushingBuffer;
-            flushingBuffer = currentBuffer;
-            currentBuffer = temp;
-
-            flushingBuffer.flip();
-            currentBuffer.clear();
+            swapArea();
 
             notFull.signal();
             return flushingBuffer;
@@ -173,12 +172,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
             }
 
             // 交换缓冲区
-            ByteBuffer temp = flushingBuffer;
-            flushingBuffer = currentBuffer;
-            currentBuffer = temp;
-
-            flushingBuffer.flip();
-            currentBuffer.clear();
+            swapArea();
 
             notFull.signal();
             return flushingBuffer;
@@ -217,12 +211,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
             }
 
             // 交换缓冲区
-            ByteBuffer temp = flushingBuffer;
-            flushingBuffer = currentBuffer;
-            currentBuffer = temp;
-
-            flushingBuffer.flip();
-            currentBuffer.clear();
+            swapArea();
 
             c.add(flushingBuffer);
             notFull.signal();
