@@ -28,4 +28,9 @@ public class SimpleString extends Resp
         buffer.writeByte((byte) '\r');
         buffer.writeByte((byte) '\n');
     }
+
+    @Override
+    public String toString() {
+        return content;
+    }
 }
