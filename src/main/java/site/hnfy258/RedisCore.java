@@ -4,6 +4,7 @@ package site.hnfy258;
  import site.hnfy258.database.RedisDB;
  import site.hnfy258.datatype.BytesWrapper;
  import site.hnfy258.datatype.RedisData;
+ import site.hnfy258.server.MyRedisService;
 
  import java.util.List;
  import java.util.Map;
@@ -37,4 +38,5 @@ package site.hnfy258;
 
      Map<BytesWrapper, RedisData> getDBData(int dbIndex);
 
+     MyRedisService getRedisService();
  }

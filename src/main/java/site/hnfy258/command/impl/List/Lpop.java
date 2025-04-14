@@ -38,7 +38,7 @@ public class Lpop implements Command {
         RedisData data = redisCore.get(key);
 
         if (data == null) {
-            return new BulkString(null);
+            return new BulkString((BytesWrapper) null );
         }
 
         if (!(data instanceof RedisList)) {

@@ -10,9 +10,11 @@ public class ClusterManager {
 
     public ClusterManager() {
         this.cluster = new RedisCluster();
+        cluster.setShardingEnabled(true);
     }
 
     public void initializeCluster() throws IOException, InterruptedException {
+
         // 先添加所有节点
         cluster.addNode("node1", "localhost", 6379);
 
@@ -41,5 +43,9 @@ public class ClusterManager {
 
     public void stopCluster() {
         cluster.stop();
+    }
+
+    public Cluster getCluster() {
+        return cluster;
     }
 }

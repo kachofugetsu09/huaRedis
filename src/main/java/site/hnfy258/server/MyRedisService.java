@@ -19,9 +19,10 @@ import site.hnfy258.coder.MyResponseEncoder;
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
 import site.hnfy258.aof.AOFHandler;
-import site.hnfy258.protocal.BulkString;
-import site.hnfy258.protocal.Resp;
-import site.hnfy258.protocal.SimpleString;
+import site.hnfy258.command.Command;
+import site.hnfy258.command.CommandType;
+import site.hnfy258.datatype.BytesWrapper;
+import site.hnfy258.protocal.*;
 import site.hnfy258.rdb.core.RDBHandler;
 
 import java.io.IOException;
@@ -33,7 +34,7 @@ public class MyRedisService implements RedisService {
 
     // 通过修改这些标志来开启或关闭AOF和RDB功能
     private static final boolean ENABLE_AOF = false;
-    private static final boolean ENABLE_RDB = false;
+    private static final boolean ENABLE_RDB = true;
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;
@@ -41,9 +42,7 @@ public class MyRedisService implements RedisService {
     private RedisCluster cluster;
     private ClusterNode currentNode;
     private Map<String, ClusterClient> clusterClients = new ConcurrentHashMap<>();
-
-
-
+    public MyCommandHandler commandHandler;
 
     private final int port;
     private final RedisCore redisCore;
@@ -69,6 +68,10 @@ public class MyRedisService implements RedisService {
         this.cluster = cluster;
     }
 
+    public RedisCluster getCluster() {
+        return this.cluster;
+    }
+
     public void setCurrentNode(ClusterNode node) {
         this.currentNode = node;
     }
@@ -79,7 +82,7 @@ public class MyRedisService implements RedisService {
 
     public MyRedisService(int port, int dbNum) throws IOException {
         this.port = port;
-        this.redisCore = new RedisCoreImpl(dbNum);
+        this.redisCore = new RedisCoreImpl(dbNum, this);
         this.channelOption = new DefaultChannelSelectStrategy().select();
         this.commandExecutor = new DefaultEventExecutorGroup(1,
                 new DefaultThreadFactory("redis-cmd"));
@@ -88,20 +91,16 @@ public class MyRedisService implements RedisService {
         if (ENABLE_RDB) {
             this.rdbHandler = new RDBHandler(redisCore);
             ((RedisCoreImpl) redisCore).setRDBHandler(this.rdbHandler);
-            //logger.info("RDB功能已启用");
         } else {
             this.rdbHandler = null;
-            //logger.info("RDB功能已禁用");
         }
 
         // 根据配置决定是否初始化AOF处理器
         if (ENABLE_AOF) {
             this.aofHandler = new AOFHandler("redis.aof");
             this.aofHandler.setSyncStrategy(AOFSyncStrategy.EVERYSEC);
-            //logger.info("AOF功能已启用");
         } else {
             this.aofHandler = null;
-            //logger.info("AOF功能已禁用");
         }
     }
 
@@ -120,6 +119,9 @@ public class MyRedisService implements RedisService {
                 this.aofHandler.load(redisCore);
             }
 
+            // 创建统一的命令处理器
+            this.commandHandler = new MyCommandHandler(redisCore, aofHandler, rdbHandler);
+
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
                     .channel(channelOption.getChannelClass())
@@ -129,8 +131,7 @@ public class MyRedisService implements RedisService {
                             ChannelPipeline pipeline = ch.pipeline();
                             pipeline.addLast(new MyDecoder());
                             pipeline.addLast(new MyResponseEncoder());
-                            pipeline.addLast(commandExecutor,
-                                    new MyCommandHandler(redisCore, aofHandler, rdbHandler));
+                            pipeline.addLast(commandExecutor, commandHandler);
                         }
                     });
 
@@ -189,14 +190,12 @@ public class MyRedisService implements RedisService {
         }
     }
 
-
     public void sendMessageToNode(String toNodeId, Resp message) {
         ClusterClient client = clusterClients.get(toNodeId);
         if (client != null && client.isActive()) {  // 确保连接活跃
             client.sendMessage(message);
         } else {
             System.err.println("No active connection to node " + toNodeId);
-            // 可选：尝试重新连接
         }
     }
 
@@ -210,7 +209,19 @@ public class MyRedisService implements RedisService {
         return redisCore;
     }
 
-    public String getPort() {
-        return String.valueOf(port);
+    public int getPort() {
+        return port;
+    }
+
+    public Resp executeCommand(RespArray commandArray) {
+        return commandHandler.processCommand(commandArray);
+    }
+
+    public ClusterNode getCurrentNode() {
+        return this.currentNode;
+    }
+
+    public MyCommandHandler getCommandHandler() {
+        return this.commandHandler;
     }
 }

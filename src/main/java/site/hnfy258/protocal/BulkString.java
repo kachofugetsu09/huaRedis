@@ -16,12 +16,16 @@ public class BulkString extends Resp {
         }
     }
 
-    public static final BulkString NullBulkString = new BulkString(null);
+    public static final BulkString NullBulkString = new BulkString((BytesWrapper) null);
 
     private BytesWrapper content;
 
     public BulkString(BytesWrapper content) {
         this.content = content;
+    }
+
+    public BulkString(String val) {
+        this.content = new BytesWrapper(val.getBytes());
     }
 
     public BytesWrapper getContent() {
@@ -52,5 +56,9 @@ public class BulkString extends Resp {
             buffer.writeBytes(Integer.toString(value).getBytes());
         }
         buffer.writeBytes(CRLF);
+    }
+
+    public boolean isNull() {
+        return content == null;
     }
 }

@@ -39,7 +39,7 @@ public class Rpop implements Command {
     public Resp handle() {
         RedisData redisData = redisCore.get(key);
         if(redisData == null){
-            return new BulkString(null);
+            return new BulkString((BytesWrapper)null);
         }
         if (!(redisData instanceof RedisList)) {
             return new Errors("WRONGTYPE Operation against a key holding the wrong kind of value");

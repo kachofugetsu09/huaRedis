@@ -64,4 +64,5 @@ public enum CommandType {
     public  Function<RedisCore, Command> getSupplier() {
         return supplier;
     }
+
 }

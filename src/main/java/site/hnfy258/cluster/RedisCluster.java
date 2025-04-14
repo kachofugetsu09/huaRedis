@@ -1,17 +1,40 @@
 package site.hnfy258.cluster;
 
+import site.hnfy258.datatype.BytesWrapper;
+import site.hnfy258.protocal.BulkString;
+import site.hnfy258.protocal.Resp;
+import site.hnfy258.protocal.SimpleString;
 import site.hnfy258.server.MyRedisService;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class RedisCluster implements Cluster {
     private Map<String, ClusterNode> nodes;
     private Map<String, MyRedisService> services;
+    private ShardingStrategy shardingStrategy;
+    private boolean shardingEnabled;
 
     public RedisCluster() {
         this.nodes = new ConcurrentHashMap<>();
         this.services = new ConcurrentHashMap<>();
+        this.shardingEnabled = false;
+    }
+
+    public RedisCluster(boolean shardingEnabled) {
+        this.nodes = new ConcurrentHashMap<>();
+        this.services = new ConcurrentHashMap<>();
+        this.shardingEnabled = shardingEnabled;
+    }
+
+    public void initializeSharding() {
+        if (shardingEnabled && !nodes.isEmpty()) {
+            List<String> nodeIds = new ArrayList<>(nodes.keySet());
+            System.out.println("Initializing sharding with nodes: " + nodeIds);
+            this.shardingStrategy = new ConsistentHashSharding(nodeIds);
+        }
     }
 
     @Override
@@ -82,5 +105,22 @@ public class RedisCluster implements Cluster {
                 }
             }
         }
+    }
+
+    @Override
+    public String getNodeForKey(BytesWrapper key) {
+        if (shardingEnabled && shardingStrategy != null) {
+            return shardingStrategy.getNodeForKey(key);
+        }
+        // 如果分片未启用或策略未初始化，返回第一个可用节点
+        return nodes.isEmpty() ? null : nodes.keySet().iterator().next();
+    }
+
+    public boolean isShardingEnabled() {
+        return shardingEnabled;
+    }
+
+    public void setShardingEnabled(boolean shardingEnabled) {
+        this.shardingEnabled = shardingEnabled;
     }
 }

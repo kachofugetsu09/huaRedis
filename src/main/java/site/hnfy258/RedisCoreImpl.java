@@ -5,6 +5,7 @@ import site.hnfy258.database.RedisDB;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
 import site.hnfy258.rdb.core.RDBHandler;
+import site.hnfy258.server.MyRedisService;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,7 +18,10 @@ public class RedisCoreImpl implements RedisCore {
     private final Map<Channel, BytesWrapper> clientNames;
     private RDBHandler rdbHandler;
 
-    public RedisCoreImpl(int dbNum) {
+    private MyRedisService redisService;
+
+
+    public RedisCoreImpl(int dbNum, MyRedisService redisService) {
         this.dbNum = dbNum;
         this.databases = new ArrayList<>(dbNum);
         for (int i = 0; i < dbNum; i++) {
@@ -26,6 +30,7 @@ public class RedisCoreImpl implements RedisCore {
         this.currentDB = ThreadLocal.withInitial(() -> 0);
         this.clients = new ConcurrentHashMap<>();
         this.clientNames = new ConcurrentHashMap<>();
+        this.redisService = redisService;
     }
     @Override
     public RedisDB getCurrentDB() {
@@ -131,6 +136,11 @@ public class RedisCoreImpl implements RedisCore {
 
     public Map<BytesWrapper, RedisData> getDBData(int dbIndex) {
         return databases.get(dbIndex).getAll();
+    }
+
+    @Override
+    public MyRedisService getRedisService() {
+        return redisService;
     }
 
 
