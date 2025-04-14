@@ -2,19 +2,19 @@ package site.hnfy258.database;
 
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
+import site.hnfy258.utils.Dict;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class RedisDB {
-    private final ConcurrentHashMap<BytesWrapper, RedisData> data;
+    private final Dict<BytesWrapper, RedisData> data;
     private final int id;
 
     public RedisDB(int id) {
         this.id = id;
-        this.data = new ConcurrentHashMap<>();
+        this.data = new Dict<>();
     }
 
     public int getId() {
@@ -49,7 +49,7 @@ public class RedisDB {
     }
 
     public long remove(List<BytesWrapper> keys) {
-        return keys.stream().peek(data::remove).count();
+        return data.removeAll(keys);
     }
 
     public void clear() {
@@ -61,6 +61,6 @@ public class RedisDB {
     }
 
     public Map<BytesWrapper, RedisData> getAll() {
-        return data;
+        return data.getAll();
     }
 }
