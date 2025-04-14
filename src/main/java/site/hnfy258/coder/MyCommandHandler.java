@@ -120,7 +120,6 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
             return result;
         } else {
             Resp result = forwardToTargetNode(targetNodeId, commandArray);
-            // 可以考虑在这里也触发某种形式的RDB通知
             return result;
         }
     }

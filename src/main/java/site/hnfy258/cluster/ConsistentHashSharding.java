@@ -41,6 +41,8 @@ public class ConsistentHashSharding implements ShardingStrategy {
     @Override
     public String getNodeForKey(BytesWrapper key) {
         int slot = getSlot(key);
+        String s = nodes.get(slots[slot]);
+        System.out.println("node"+s);
         return nodes.get(slots[slot]);
     }
 
