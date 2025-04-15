@@ -1,10 +1,17 @@
 package site.hnfy258.datatype;
 
-public class RedisString implements RedisData,Cloneable {
+import site.hnfy258.utils.SDS;
+
+public class RedisString implements RedisData, Cloneable {
     private volatile long timeout;
-    private BytesWrapper value;
+    private SDS value;
 
     public RedisString(BytesWrapper value) {
+        this.value = new SDS(value.getBytes());
+        this.timeout = -1;
+    }
+
+    public RedisString(SDS value) {
         this.value = value;
         this.timeout = -1;
     }
@@ -21,11 +28,11 @@ public class RedisString implements RedisData,Cloneable {
 
     @Override
     public RedisData deepCopy() {
-        try{
+        try {
             RedisString clone = (RedisString) super.clone();
             clone.value = value.deepCopy();
             return clone;
-        }catch(CloneNotSupportedException e){
+        } catch (CloneNotSupportedException e) {
             throw new RuntimeException(e);
         }
     }
@@ -36,6 +43,10 @@ public class RedisString implements RedisData,Cloneable {
     }
 
     public BytesWrapper getValue() {
+        return new BytesWrapper(value.getBytes());
+    }
+
+    public SDS getSdsValue() {
         return value;
     }
 
@@ -44,14 +55,18 @@ public class RedisString implements RedisData,Cloneable {
     }
 
     public void setValue(BytesWrapper value) {
+        this.value = new SDS(value.getBytes());
+    }
+
+    public void setSdsValue(SDS value) {
         this.value = value;
     }
 
     public long incr() {
         try {
-            long currentValue = Long.parseLong(value.toUtf8String());
+            long currentValue = Long.parseLong(value.toString());
             long newValue = currentValue + 1;
-            this.value = new BytesWrapper(String.valueOf(newValue).getBytes());
+            this.value = new SDS(String.valueOf(newValue).getBytes());
             return newValue;
         } catch (NumberFormatException e) {
             throw new IllegalStateException("value is not an integer or out of range");

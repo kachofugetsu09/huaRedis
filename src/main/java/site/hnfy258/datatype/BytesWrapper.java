@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 public class BytesWrapper  implements Comparable<BytesWrapper> {
-    static final Charset CHARSET = StandardCharsets.UTF_8;
+    public static final Charset CHARSET = StandardCharsets.UTF_8;
     private byte[] bytes;
 
     public BytesWrapper(byte[] bytes) {
