@@ -24,7 +24,10 @@ public class SDS {
     }
 
     public byte[] getBytes() {
-        return bytes;
+        // 只返回实际使用的字节，不包含预分配的空间
+        byte[] result = new byte[len];
+        System.arraycopy(bytes, 0, result, 0, len);
+        return result;
     }
 
     public String toString(){

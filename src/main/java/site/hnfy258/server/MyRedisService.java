@@ -1,6 +1,7 @@
 package site.hnfy258.server;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
@@ -13,6 +14,7 @@ import site.hnfy258.aof.AOFSyncStrategy;
 import site.hnfy258.cluster.ClusterClient;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.cluster.RedisCluster;
+import site.hnfy258.coder.CompressionCoedC;
 import site.hnfy258.coder.MyCommandHandler;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
@@ -35,6 +37,8 @@ public class MyRedisService implements RedisService {
     // 通过修改这些标志来开启或关闭AOF和RDB功能
     private static final boolean ENABLE_AOF = false;
     private static final boolean ENABLE_RDB = false;
+
+    private static final boolean ENABLE_COMPRESSION = true;
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;
@@ -124,13 +128,23 @@ public class MyRedisService implements RedisService {
 
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
-                    .channel(channelOption.getChannelClass())
+                    .channel(channelOption.getChannelClass()).
+                    childOption(ChannelOption.SO_KEEPALIVE, true).
+                    childOption(ChannelOption.TCP_NODELAY, true).
+                    childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ChannelPipeline pipeline = ch.pipeline();
+
+
                             pipeline.addLast(new MyDecoder());
+
                             pipeline.addLast(new MyResponseEncoder());
+
+                            if(ENABLE_COMPRESSION){
+                                pipeline.addLast(new CompressionCoedC());
+                            }
                             pipeline.addLast(commandExecutor, commandHandler);
                         }
                     });
