@@ -35,10 +35,10 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改这些标志来开启或关闭AOF和RDB功能
-    private static final boolean ENABLE_AOF = false;
+    private static final boolean ENABLE_AOF = true;
     private static final boolean ENABLE_RDB = false;
 
-    private static final boolean ENABLE_COMPRESSION = true;
+    private static final boolean ENABLE_COMPRESSION = false;
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;

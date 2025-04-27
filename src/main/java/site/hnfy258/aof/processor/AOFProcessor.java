@@ -20,7 +20,6 @@ public class AOFProcessor implements Processor {
     private static final Logger logger = Logger.getLogger(AOFProcessor.class);
 
     private final DoubleBufferBlockingQueue bufferQueue;    // 双缓冲队列
-    private final LinkedBlockingQueue<Resp> commandQueue;   // 命令队列
     private final Writer writer;                            // 文件写入器
     private final AtomicBoolean running;                    // 运行状态标志
 
@@ -32,7 +31,6 @@ public class AOFProcessor implements Processor {
     public AOFProcessor(Writer writer, int bufferSize) {
         // 1. 初始化组件
         this.writer = writer;
-        this.commandQueue = new LinkedBlockingQueue<>();
         this.bufferQueue = new DoubleBufferBlockingQueue(bufferSize);
         this.running = new AtomicBoolean(true);
     }
@@ -41,32 +39,31 @@ public class AOFProcessor implements Processor {
     public void append(Resp command) {
         // 1. 将命令添加到命令队列
         if (running.get()) {
-            commandQueue.offer(command);
+           try{
+               ByteBuf buf = Unpooled.buffer();
+               command.write(command, buf);
+               ByteBuffer byteBuffer = buf.nioBuffer();
+               bufferQueue.put(byteBuffer);
+           }catch(InterruptedException e){
+               logger.error("AOFProcessor.append()", e);
+           }
         }
     }
 
-    @Override
-    public void processCommand() throws InterruptedException, IOException {
-        // 1. 从命令队列中获取命令，最多等待100毫秒
-        Resp command = commandQueue.poll(100, TimeUnit.MILLISECONDS);
-        if (command != null) {
-            // 2. 将命令序列化到缓冲区
-            ByteBuf buf = Unpooled.buffer();
-            command.write(command, buf);
-            ByteBuffer byteBuffer = buf.nioBuffer();
-
-            // 3. 将序列化后的缓冲区加入到双缓冲队列
-            bufferQueue.put(byteBuffer);
-        }
-    }
 
     @Override
     public void flush() throws IOException {
         // 1. 从双缓冲队列中获取待写入的缓冲区
         ByteBuffer buffer = bufferQueue.poll();
 
-        // 2. 将缓冲区内容写入到AOF文件
-        writer.write(buffer);
+        if(buffer != null&& buffer.hasRemaining()){
+            try {
+                // 2. 将缓冲区写入文件
+                writer.write(buffer);
+            } catch (IOException e) {
+                logger.error("AOFProcessor.flush()", e);
+            }
+        }
     }
 
     @Override

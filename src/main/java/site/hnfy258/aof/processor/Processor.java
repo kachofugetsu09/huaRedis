@@ -7,7 +7,6 @@ import java.io.IOException;
 public interface Processor {
     void append(Resp command);
 
-    void processCommand() throws InterruptedException, IOException;
 
     void flush() throws IOException;
 
