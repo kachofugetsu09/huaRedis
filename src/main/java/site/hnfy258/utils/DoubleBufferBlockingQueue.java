@@ -19,6 +19,9 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
 
     private volatile boolean closed = false;
 
+    private volatile long writePosition = 0;
+    private volatile long flushPosition = 0;
+
 
 
     public DoubleBufferBlockingQueue(int bufferSize) {
@@ -35,19 +38,45 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
 
         lock.lock();
         try {
-            // 确保有足够的空间放入整个ByteBuffer
-            while (currentBuffer.remaining() < src.remaining()) {
-                notFull.await();
-                if (closed) {
-                    throw new IllegalStateException("Queue is closed");
+            int requiredSpace = src.remaining();
+
+            // 如果当前缓冲区空间不足，等待刷新
+            while (currentBuffer.remaining() < requiredSpace) {
+                // 如果缓冲区太小无法放入数据，抛出异常
+                if (requiredSpace > bufferSize) {
+                    throw new IllegalArgumentException(
+                            "Buffer too large: " + requiredSpace + " bytes, max is " + bufferSize);
+                }
+
+                // 如果当前缓冲区已使用空间超过一半，主动触发交换
+                if (currentBuffer.position() > bufferSize / 2) {
+                    swapArea();
+                    notFull.signal();
+                } else {
+                    // 否则等待空间变得可用
+                    notFull.await();
+                    if (closed) {
+                        throw new IllegalStateException("Queue is closed");
+                    }
                 }
             }
+
+            // 记录写入前的位置，用于跟踪
+            int beforePos = currentBuffer.position();
+
+            // 执行数据写入
             currentBuffer.put(src);
+
+            // 更新写入位置
+            writePosition += (currentBuffer.position() - beforePos);
+
+            // 通知有新数据可用
             notEmpty.signal();
         } finally {
             lock.unlock();
         }
     }
+
 
     @Override
     public ByteBuffer take() throws InterruptedException {
@@ -79,6 +108,8 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         // 准备返回的缓冲区
         flushingBuffer.flip();
         currentBuffer.clear();
+
+        flushPosition = writePosition;
     }
 
     public void close() {
@@ -338,5 +369,23 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         } finally {
             lock.unlock();
         }
+    }
+
+    public long getWritePosition() {
+        return writePosition;
+    }
+
+    /**
+     * 获取最后刷盘位置
+     */
+    public long getFlushPosition() {
+        return flushPosition;
+    }
+
+    /**
+     * 获取未刷盘数据大小
+     */
+    public long getUnflushedSize() {
+        return writePosition - flushPosition;
     }
 }

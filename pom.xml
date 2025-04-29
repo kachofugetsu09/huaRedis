@@ -54,6 +54,13 @@
             <version>1.8.0</version>
         </dependency>
 
+
+        <dependency>
+            <groupId>io.github.karlatemp</groupId>
+            <artifactId>unsafe-accessor</artifactId>
+            <version>1.7.0</version>
+        </dependency>
+
     </dependencies>
 
 </project>
