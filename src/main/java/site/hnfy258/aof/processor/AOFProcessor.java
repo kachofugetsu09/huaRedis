@@ -106,7 +106,7 @@ public class AOFProcessor implements Processor {
      * 刷新批处理缓冲区
      */
     private void flushBatch() throws InterruptedException {
-        if (batchBuffer.readableBytes() <= 0) {
+        if ( batchBuffer == null||batchBuffer.readableBytes() <= 0) {
             return;
         }
 

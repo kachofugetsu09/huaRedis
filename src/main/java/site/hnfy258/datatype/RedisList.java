@@ -1,5 +1,8 @@
 package site.hnfy258.datatype;
 
+import site.hnfy258.protocal.BulkString;
+import site.hnfy258.protocal.Resp;
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -36,6 +39,16 @@ public class RedisList implements  RedisData,Cloneable{
     @Override
     public boolean isImmutable() {
         return false;
+    }
+
+    @Override
+    public List<Resp> convertToRESP() {
+        List<Resp> res = new ArrayList<>();
+
+        for(BytesWrapper value: list){
+            res.add(new BulkString(value));
+        }
+        return res;
     }
 
     public long getTimeout() {

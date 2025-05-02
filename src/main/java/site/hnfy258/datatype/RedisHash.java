@@ -1,8 +1,10 @@
 package site.hnfy258.datatype;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import site.hnfy258.protocal.BulkString;
+import site.hnfy258.protocal.Resp;
+import site.hnfy258.protocal.RespArray;
+
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class RedisHash implements  RedisData,Cloneable{
@@ -33,6 +35,18 @@ public class RedisHash implements  RedisData,Cloneable{
     @Override
     public boolean isImmutable() {
         return false;
+    }
+
+    @Override
+    public List<Resp> convertToRESP() {
+        List<Resp> res = new ArrayList<>();
+        for(Map.Entry<BytesWrapper,BytesWrapper> entry:redisHashMap.entrySet()){
+            Resp[] resp = new Resp[2];
+            resp[0] = new BulkString(entry.getKey());
+            resp[1] = new BulkString(entry.getValue());
+            res.add(new RespArray(resp));
+        }
+        return res;
     }
 
 

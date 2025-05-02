@@ -6,11 +6,13 @@ import site.hnfy258.aof.loader.AOFLoader;
 import site.hnfy258.aof.loader.Loader;
 import site.hnfy258.aof.processor.AOFProcessor;
 import site.hnfy258.aof.processor.Processor;
+import site.hnfy258.aof.rewriter.AOFRewriter;
 import site.hnfy258.aof.writer.AOFWriter;
 import site.hnfy258.aof.writer.Writer;
 import site.hnfy258.protocal.Resp;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * AOF处理器，负责管理AOF的各个组件和操作
@@ -25,12 +27,16 @@ public class AOFHandler {
     private final AOFBackgroundService backgroundService;  // AOF后台服务
     private AOFSyncStrategy syncStrategy;        // 同步策略
 
+    private AOFRewriter rewriter;
+    private final AtomicBoolean rewriting;
+    private Thread rewriteThread;
+
     /**
      * 构造AOF处理器
      * @param filename AOF文件名
      * @throws IOException 如果创建文件失败
      */
-    public AOFHandler(String filename) throws IOException {
+    public AOFHandler(String filename, RedisCore redisCore) throws IOException {
         this.filename = filename;
         // 1. 设置默认同步策略为每秒同步
         this.syncStrategy = AOFSyncStrategy.EVERYSEC;
@@ -42,6 +48,9 @@ public class AOFHandler {
         this.loader = new AOFLoader();
         // 5. 创建AOF后台服务
         this.backgroundService = new AOFBackgroundService(processor, syncStrategy);
+
+        this.rewriter = new AOFRewriter(redisCore, filename,2*1024*1024);
+        this.rewriting = new AtomicBoolean(false);
     }
 
     /**
@@ -69,6 +78,18 @@ public class AOFHandler {
         backgroundService.stop();
         // 2. 关闭写入器
         writer.close();
+
+        //3.等待重写线程完成工作
+        if(rewriteThread != null && rewriteThread.isAlive() && !rewriteThread.isInterrupted()){
+            rewriteThread.interrupt();
+            try{
+                rewriteThread.join(3000);
+                logger.info("AOFHandler.stop()");
+            }catch(InterruptedException e){
+                logger.error("AOFHandler.stop()", e);
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
@@ -87,5 +108,49 @@ public class AOFHandler {
     public void load(RedisCore redisCore) throws IOException {
         // 使用加载器加载AOF文件
         loader.load(filename, redisCore);
+    }
+
+    public boolean startRewrite(){
+        if(rewriting.get()){
+            logger.warn("已有重写任务在进行中，忽略此次请求");
+            return false;
+        }
+        if(!rewriter.canRewrite()){
+            logger.warn("重写文件失败，请检查重写文件是否正在被使用");
+            return false;
+        }
+
+        if (rewriting.compareAndSet(false, true)) {
+            rewriteThread = new Thread(() -> {
+                try {
+                    // 执行重写逻辑前，确保所有数据都已刷盘
+                    processor.flush();
+
+                    // 执行重写
+                    boolean success = rewriter.rewrite();
+
+                    if (success) {
+                        logger.info("AOF重写成功完成");
+                    } else {
+                        logger.warn("AOF重写失败");
+                    }
+                } catch (Exception e) {
+                    logger.error("AOF重写过程中出错", e);
+                } finally {
+                    rewriting.set(false);
+                }
+            });
+
+            rewriteThread.setName("aof-rewrite");
+            rewriteThread.start();
+            return true;
+        }
+
+        return false;
+    }
+
+
+    public boolean isRewriting(){
+        return rewriting.get();
     }
 }

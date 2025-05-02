@@ -1,7 +1,12 @@
 package site.hnfy258.datatype;
 
+import site.hnfy258.protocal.BulkString;
+import site.hnfy258.protocal.Resp;
+import site.hnfy258.protocal.RespArray;
 import site.hnfy258.utils.SkipList;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class RedisZset implements  RedisData,Cloneable{
@@ -38,6 +43,21 @@ public class RedisZset implements  RedisData,Cloneable{
     @Override
     public boolean isImmutable() {
         return false;
+    }
+
+    @Override
+    public List<Resp> convertToRESP() {
+        List<Resp> res = new ArrayList<>();
+
+        List<SkipList.Node> nodes = skipList.getRange(0, skipList.size()-1);
+
+        for(SkipList.Node node:nodes){
+            Resp[] resp = new Resp[2];
+            resp[0] = new BulkString(new BytesWrapper(node.member.getBytes()));
+            resp[1] = new BulkString(new BytesWrapper(String.valueOf(node.score).getBytes()));
+            res.add(new RespArray(resp));
+        }
+        return res;
     }
 
     public boolean add(double score, String member) {

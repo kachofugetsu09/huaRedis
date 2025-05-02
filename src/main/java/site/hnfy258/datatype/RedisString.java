@@ -1,6 +1,11 @@
 package site.hnfy258.datatype;
 
+import site.hnfy258.protocal.BulkString;
+import site.hnfy258.protocal.Resp;
 import site.hnfy258.utils.SDS;
+
+import java.util.Collections;
+import java.util.List;
 
 public class RedisString implements RedisData, Cloneable {
     private volatile long timeout;
@@ -41,6 +46,15 @@ public class RedisString implements RedisData, Cloneable {
     public boolean isImmutable() {
         return true;
     }
+
+    @Override
+    public List<Resp> convertToRESP() {
+        if(value==null){
+            return Collections.singletonList(BulkString.NullBulkString);
+        }
+        return Collections.singletonList(new BulkString(getValue()));
+    }
+
 
     public BytesWrapper getValue() {
         return new BytesWrapper(value.getBytes());

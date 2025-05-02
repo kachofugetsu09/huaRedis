@@ -101,7 +101,7 @@ public class MyRedisService implements RedisService {
 
         // 根据配置决定是否初始化AOF处理器
         if (ENABLE_AOF) {
-            this.aofHandler = new AOFHandler("redis.aof");
+            this.aofHandler = new AOFHandler("redis.aof", redisCore);
             this.aofHandler.setSyncStrategy(AOFSyncStrategy.EVERYSEC);
         } else {
             this.aofHandler = null;
@@ -237,5 +237,9 @@ public class MyRedisService implements RedisService {
 
     public MyCommandHandler getCommandHandler() {
         return this.commandHandler;
+    }
+
+    public AOFHandler getAofHandler() {
+        return this.aofHandler;
     }
 }

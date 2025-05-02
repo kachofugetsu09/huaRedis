@@ -1,6 +1,8 @@
 package site.hnfy258.datatype;
 
 import org.apache.log4j.Logger;
+import site.hnfy258.protocal.BulkString;
+import site.hnfy258.protocal.Resp;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListSet;
@@ -33,6 +35,17 @@ public class RedisSet implements  RedisData,Cloneable{
     @Override
     public boolean isImmutable() {
         return false;
+    }
+
+    @Override
+    public List<Resp> convertToRESP() {
+        List<Resp> res = new ArrayList<>();
+
+        for(BytesWrapper member:redisSet){
+            res.add(new BulkString(member));
+        }
+
+        return res;
     }
 
     public int sadd(List<BytesWrapper> members){
