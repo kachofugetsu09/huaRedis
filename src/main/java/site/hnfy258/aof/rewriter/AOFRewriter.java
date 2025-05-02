@@ -17,7 +17,9 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -48,6 +50,8 @@ public class AOFRewriter {
         return !isRewriting.get();
     }
 
+    List<ByteBuffer> rewriteByffer;
+
     public boolean rewrite(){
         if(!isRewriting.compareAndSet(false,true)){
             logger.error("正在重写");
@@ -55,28 +59,83 @@ public class AOFRewriter {
         }
 
         try{
+            rewriteByffer = Collections.synchronizedList(new ArrayList<>());
+
+            redisCore.getRedisService().getAofHandler().startRewriteBuffer();
+
             File tempFile = new File(tempFilename);
             if(tempFile.exists()){
                 tempFile.delete();
             }
 
+
+
             boolean success = doWrite();
 
+
             if(success){
-                tempFile.renameTo(new File(aofFilename));
+                List<ByteBuffer> buffers = redisCore.getRedisService().getAofHandler().stopRewriteBufferAndGet();
+
+                // 将重写期间的命令追加到新AOF文件
+                appendRewriteBufferToTempFile(buffers);
+
+                // 原子性地替换文件
+                atomicReplaceFile(tempFile, new File(aofFilename));
             }else{
                 logger.error("重写失败");
                 tempFile.delete();
+
+                redisCore.getRedisService().getAofHandler().discardRewriteBuffer();
             }
             return success;
         }catch(Exception e){
             logger.error("Error during AOFRewriter", e);
+            redisCore.getRedisService().getAofHandler().discardRewriteBuffer();
+            return false;
         }finally {
             isRewriting.set(false);
         }
-        return false;
     }
 
+    private void atomicReplaceFile(File tempFile, File file) throws IOException {
+        if(!tempFile.renameTo(file)){
+            File backup = new File(file.getAbsolutePath() + ".bak");
+            if(file.exists()){
+                if(backup.exists()){
+                    backup.delete();
+                }
+                file.renameTo(backup);
+            }
+
+            if(!tempFile.renameTo(tempFile)){
+                Files.copy(tempFile.toPath(), file.toPath());
+                tempFile.delete();
+            }
+
+            if(backup.exists()){
+                backup.delete();
+            }
+        }
+    }
+
+
+    private void appendRewriteBufferToTempFile(List<ByteBuffer> buffers) throws IOException{
+        if(buffers==null || buffers.isEmpty()){
+            return;
+        }
+        try(RandomAccessFile raf = new RandomAccessFile(tempFilename,"rw");
+        FileChannel fileChannel = raf.getChannel();){
+            fileChannel.position(fileChannel.size());
+
+            for(ByteBuffer buffer : buffers){
+                if(buffer.hasRemaining() && buffer!=null){
+                    fileChannel.write(buffer);
+                }
+            }
+            fileChannel.force(false);
+        }
+
+    }
 
 
     private boolean doWrite() {

@@ -1,5 +1,8 @@
 package site.hnfy258.aof;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.util.concurrent.CompleteFuture;
 import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.aof.loader.AOFLoader;
@@ -12,6 +15,11 @@ import site.hnfy258.aof.writer.Writer;
 import site.hnfy258.protocal.Resp;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -30,6 +38,10 @@ public class AOFHandler {
     private AOFRewriter rewriter;
     private final AtomicBoolean rewriting;
     private Thread rewriteThread;
+    List<ByteBuffer> rewriteBuffer;
+    private AtomicBoolean collectingRewriteBuffer = new AtomicBoolean(false);
+
+    private CompletableFuture<Boolean> rewriteFuture;
 
     /**
      * 构造AOF处理器
@@ -68,6 +80,14 @@ public class AOFHandler {
     public void append(Resp command) {
         // 将命令交给处理器，处理器会从对应的Command队列中获取命令
         processor.append(command);
+
+        if(collectingRewriteBuffer.get() && rewriteBuffer != null){
+            ByteBuf buf = Unpooled.directBuffer();
+            command.write(command, buf);
+            ByteBuffer byteBuffer = buf.nioBuffer();
+            rewriteBuffer.add(byteBuffer);
+            buf.release();
+        }
     }
 
     /**
@@ -79,17 +99,6 @@ public class AOFHandler {
         // 2. 关闭写入器
         writer.close();
 
-        //3.等待重写线程完成工作
-        if(rewriteThread != null && rewriteThread.isAlive() && !rewriteThread.isInterrupted()){
-            rewriteThread.interrupt();
-            try{
-                rewriteThread.join(3000);
-                logger.info("AOFHandler.stop()");
-            }catch(InterruptedException e){
-                logger.error("AOFHandler.stop()", e);
-                Thread.currentThread().interrupt();
-            }
-        }
     }
 
     /**
@@ -110,18 +119,23 @@ public class AOFHandler {
         loader.load(filename, redisCore);
     }
 
-    public boolean startRewrite(){
-        if(rewriting.get()){
+    public CompletableFuture<Boolean> startRewrite() {
+        if (rewriting.get()) {
             logger.warn("已有重写任务在进行中，忽略此次请求");
-            return false;
+            CompletableFuture<Boolean> future = new CompletableFuture<>();
+            future.complete(false);
+            return future;
         }
-        if(!rewriter.canRewrite()){
+        if (!rewriter.canRewrite()) {
             logger.warn("重写文件失败，请检查重写文件是否正在被使用");
-            return false;
+            CompletableFuture<Boolean> future = new CompletableFuture<>();
+            future.complete(false);
+            return future;
         }
 
         if (rewriting.compareAndSet(false, true)) {
-            rewriteThread = new Thread(() -> {
+            rewriteFuture = new CompletableFuture<>();
+            CompletableFuture.runAsync(() -> {
                 try {
                     // 执行重写逻辑前，确保所有数据都已刷盘
                     processor.flush();
@@ -134,23 +148,42 @@ public class AOFHandler {
                     } else {
                         logger.warn("AOF重写失败");
                     }
+
+                    rewriteFuture.complete(success);
                 } catch (Exception e) {
                     logger.error("AOF重写过程中出错", e);
+                    rewriteFuture.completeExceptionally(e);
                 } finally {
                     rewriting.set(false);
                 }
             });
-
-            rewriteThread.setName("aof-rewrite");
-            rewriteThread.start();
-            return true;
+        }
+        return rewriteFuture;
         }
 
-        return false;
-    }
 
 
     public boolean isRewriting(){
         return rewriting.get();
+    }
+
+
+
+    public void startRewriteBuffer() {
+        rewriteBuffer = Collections.synchronizedList(new ArrayList<>());
+        collectingRewriteBuffer.set(true);
+    }
+
+
+    public void discardRewriteBuffer() {
+        collectingRewriteBuffer.set(false);
+        rewriteBuffer = null;
+    }
+
+    public List<ByteBuffer> stopRewriteBufferAndGet() {
+        collectingRewriteBuffer.set(false);
+        List<ByteBuffer> result = rewriteBuffer;
+        rewriteBuffer = null;
+        return result;
     }
 }
