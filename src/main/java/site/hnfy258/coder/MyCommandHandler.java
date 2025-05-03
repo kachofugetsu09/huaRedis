@@ -10,6 +10,7 @@ import site.hnfy258.cluster.RedisCluster;
 import site.hnfy258.cluster.replication.ReplicationHandler;
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
+import site.hnfy258.command.CommandUtils;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.protocal.*;
 import site.hnfy258.rdb.core.RDBHandler;
@@ -17,7 +18,9 @@ import site.hnfy258.server.MyRedisService;
 
 import java.io.IOException;
 import java.net.SocketException;
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 @ChannelHandler.Sharable
@@ -25,27 +28,47 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
     private static final Logger logger = Logger.getLogger(MyCommandHandler.class);
     private final RedisCore redisCore;
     private final AOFHandler aofHandler;
-    private final RDBHandler rdbHandler;
+    private RDBHandler rdbHandler;
+    private ReplicationHandler replicationHandler;
 
-    private final ReplicationHandler replicationHandler;
-
-
+    // 定义不需要记录日志的命令
+    private static final List<String> SILENT_COMMANDS = new ArrayList<>();
+    
+    static {
+        SILENT_COMMANDS.add("SCAN");
+        SILENT_COMMANDS.add("PING");
+        SILENT_COMMANDS.add("INFO");
+    }
 
     // 使用EnumSet提高查找效率
     private static final Set<CommandType> WRITE_COMMANDS = EnumSet.of(
-            CommandType.SET, CommandType.DEL, CommandType.INCR, CommandType.MSET,
-            CommandType.EXPIRE, CommandType.SADD, CommandType.SREM, CommandType.SPOP,
+            // 字符串操作
+            CommandType.SET, CommandType.MSET, CommandType.INCR,
+            
+            // 键管理
+            CommandType.DEL, CommandType.EXPIRE,
+            
+            // 哈希表操作
             CommandType.HSET, CommandType.HMEST, CommandType.HDEL,
+            
+            // 列表操作
             CommandType.LPUSH, CommandType.RPUSH, CommandType.LPOP, CommandType.RPOP, CommandType.LREM,
-            CommandType.ZADD, CommandType.ZREM,CommandType.SELECT
+            
+            // 集合操作
+            CommandType.SADD, CommandType.SREM, CommandType.SPOP,
+            
+            // 有序集合操作
+            CommandType.ZADD, CommandType.ZREM,
+            
+            // 数据库操作
+            CommandType.SELECT, CommandType.SAVE
     );
 
-    public MyCommandHandler(RedisCore redisCore, AOFHandler aofHandler, RDBHandler rdbHandler, ReplicationHandler replicationHandler) {
-        this.redisCore = redisCore;
+    public MyCommandHandler(RedisCore core, AOFHandler aofHandler, RDBHandler rdbHandler, ReplicationHandler replicationHandler) {
+        this.redisCore = core;
         this.aofHandler = aofHandler;
         this.rdbHandler = rdbHandler;
         this.replicationHandler = replicationHandler;
-
     }
 
     @Override
@@ -77,28 +100,61 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
                 return new Errors("ERR unknown command '" + commandName + "'");
             }
 
+            // 检查是否是静默命令（不需要记录日志的命令）
+            boolean isSilentCommand = CommandUtils.isSilentCommand(commandName);
+            
+            // 判断是否是写命令
+            boolean isWriteCommand = CommandUtils.isWriteCommand(commandType);
+            
+            // 只有非静默命令才记录详细日志
+            if (!isSilentCommand) {
+                logger.info("处理命令: " + commandName + ", 是否是写命令: " + isWriteCommand + 
+                        ", 是否有复制处理器: " + (replicationHandler != null));
+            }
+
+            // 判断是否需要在集群中处理（主要针对分片模式）
             if (shouldHandleInCluster(commandType, commandArray)) {
                 return handleClusterCommand(commandType, commandArray);
             }
 
+            // 本地执行命令
             Command command = commandType.getSupplier().apply(redisCore);
             command.setContext(array);
-
             Resp result = command.handle();
 
-            if (rdbHandler != null && WRITE_COMMANDS.contains(commandType) && array.length > 1) {
-                rdbHandler.notifyDataChanged(redisCore.getCurrentDB().getId(), ((BulkString) array[1]).getContent());
+            // 触发RDB变更通知和AOF记录（仅对写命令）
+            if (isWriteCommand && array.length > 1) {
+                if (!isSilentCommand) {
+                    logger.info("处理写命令: " + commandName + " 在数据库索引: " + redisCore.getCurrentDBIndex());
+                }
+                
+                if (rdbHandler != null) {
+                    rdbHandler.notifyDataChanged(redisCore.getCurrentDB().getId(), ((BulkString) array[1]).getContent());
+                }
+                
+                // 写命令处理：AOF记录
+                if (aofHandler != null) {
+                    aofHandler.append(commandArray);
+                }
             }
-
-            // 如果启用了AOF，记录命令
-           if (aofHandler != null && WRITE_COMMANDS.contains(commandType)){
-                aofHandler.append(commandArray);
+                
+            // 主从复制：复制所有命令（不仅限于写命令）
+            if (replicationHandler != null && array.length > 0) {
+                // 记录要复制的命令
+                if (logger.isDebugEnabled() && !isSilentCommand) {
+                    String cmdStr = formatCommand(commandArray);
+                    logger.debug("复制命令: " + cmdStr + 
+                               ", 数据库索引: " + redisCore.getCurrentDBIndex());
+                }
+                
+                // 将命令复制到所有从节点
+                replicationHandler.handle(commandArray);
+                
+                // 只对非静默命令记录完成日志
+                if (!isSilentCommand) {
+                    logger.info("完成命令复制: " + commandName);
+                }
             }
-
-           if(replicationHandler != null && WRITE_COMMANDS.contains(commandType)){
-               replicationHandler.handle(commandArray);
-               System.out.println("replicationHandler send command"+ commandArray);
-           }
 
             return result;
         } catch (Exception e) {
@@ -109,8 +165,25 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
 
     private boolean shouldHandleInCluster(CommandType commandType, RespArray commandArray) {
         RedisCluster cluster = redisCore.getRedisService().getCluster();
-        return cluster != null && cluster.isShardingEnabled() &&
-                (commandType == CommandType.GET || commandType == CommandType.SET);
+        
+        // 如果集群不存在或未启用分片，直接返回false
+        if (cluster == null || !cluster.isShardingEnabled()) {
+            return false;
+        }
+        
+        // 对于SCAN命令，始终在本地执行，不使用集群路由
+        if (commandType == CommandType.SCAN) {
+            return false;
+        }
+        
+        // 在启用了主从复制的情况下，所有写命令都在本地处理后通过复制机制同步到从节点
+        if (CommandUtils.isWriteCommand(commandType) && replicationHandler != null) {
+            return false;
+        }
+        
+        // 在分片模式下，读命令按键路由到相应节点
+        // 目前只处理GET命令，如果需要支持更多读命令，可以扩展这里
+        return commandType == CommandType.GET;
     }
 
     private Resp handleClusterCommand(CommandType commandType, RespArray commandArray) {
@@ -125,7 +198,7 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
             Resp result = command.handle();
 
             // 确保本地执行时也触发RDB
-            if (rdbHandler != null && WRITE_COMMANDS.contains(commandType) && commandArray.getArray().length > 1) {
+            if (rdbHandler != null && CommandUtils.isWriteCommand(commandType) && commandArray.getArray().length > 1) {
                 rdbHandler.notifyDataChanged(redisCore.getCurrentDB().getId(), key);
             }
 
@@ -205,5 +278,47 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
             );
         }
         return false;
+    }
+
+    // 将命令数组转换为可读字符串（用于日志）
+    private String formatCommand(RespArray commandArray) {
+        if (commandArray == null || commandArray.getArray().length == 0) {
+            return "[]";
+        }
+        
+        Resp[] array = commandArray.getArray();
+        StringBuilder sb = new StringBuilder();
+        
+        // 尝试获取命令名称
+        if (array[0] instanceof BulkString) {
+            String cmdName = ((BulkString) array[0]).getContent().toUtf8String();
+            sb.append(cmdName.toUpperCase());
+            
+            // 添加参数
+            for (int i = 1; i < array.length && i < 4; i++) { // 最多显示前3个参数
+                if (array[i] instanceof BulkString) {
+                    sb.append(" ").append(((BulkString) array[i]).getContent().toUtf8String());
+                } else {
+                    sb.append(" [非字符串参数]");
+                }
+            }
+            
+            // 如果参数太多，显示省略号
+            if (array.length > 4) {
+                sb.append(" ...");
+            }
+            
+            // 显示总参数数量
+            sb.append(" (共").append(array.length - 1).append("个参数)");
+        } else {
+            sb.append(commandArray.toString());
+        }
+        
+        return sb.toString();
+    }
+
+    // 添加动态更新复制处理器的方法
+    public void setReplicationHandler(ReplicationHandler replicationHandler) {
+        this.replicationHandler = replicationHandler;
     }
 }

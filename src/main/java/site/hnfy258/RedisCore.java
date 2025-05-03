@@ -1,42 +1,48 @@
 package site.hnfy258;
 
- import io.netty.channel.Channel;
- import site.hnfy258.database.RedisDB;
- import site.hnfy258.datatype.BytesWrapper;
- import site.hnfy258.datatype.RedisData;
- import site.hnfy258.server.MyRedisService;
+import io.netty.channel.Channel;
+import site.hnfy258.database.RedisDB;
+import site.hnfy258.datatype.BytesWrapper;
+import site.hnfy258.datatype.RedisData;
+import site.hnfy258.server.MyRedisService;
 
- import java.util.List;
- import java.util.Map;
- import java.util.Set;
- 
- public interface RedisCore
- {
-     Set<BytesWrapper> keys();
- 
-     void putClient(BytesWrapper connectionName, Channel channelContext);
- 
-     boolean exist(BytesWrapper key);
- 
-     void put(BytesWrapper key, RedisData redisData);
- 
-     RedisData get(BytesWrapper key);
- 
-     long remove(List<BytesWrapper> keys);
- 
-     void cleanAll();
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-     RedisDB getCurrentDB();
+public interface RedisCore
+{
+    Set<BytesWrapper> keys();
 
-     void selectDB(int index);
+    void putClient(BytesWrapper connectionName, Channel channelContext);
 
-     int getDbNum();
+    boolean exist(BytesWrapper key);
 
-     Map<BytesWrapper, RedisData> getAll();
+    void put(BytesWrapper key, RedisData redisData);
 
-     void setDB(int currentDb, BytesWrapper bytesWrapper, RedisData redisData);
+    RedisData get(BytesWrapper key);
 
-     Map<BytesWrapper, RedisData> getDBData(int dbIndex);
+    long remove(List<BytesWrapper> keys);
 
-     MyRedisService getRedisService();
- }
+    void cleanAll();
+
+    RedisDB getCurrentDB();
+
+    void selectDB(int index);
+
+    int getDbNum();
+
+    Map<BytesWrapper, RedisData> getAll();
+
+    void setDB(int currentDb, BytesWrapper bytesWrapper, RedisData redisData);
+
+    Map<BytesWrapper, RedisData> getDBData(int dbIndex);
+
+    MyRedisService getRedisService();
+
+    /**
+     * 获取当前数据库索引
+     * @return 当前数据库索引
+     */
+    int getCurrentDBIndex();
+}

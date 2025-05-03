@@ -72,6 +72,10 @@ public class MyRedisService implements RedisService {
         return clusterClients.get(nodeId);
     }
 
+    public Map<String, ClusterClient> getClusterClients() {
+        return clusterClients;
+    }
+
     public void setCluster(RedisCluster cluster) {
         this.cluster = cluster;
     }
@@ -83,9 +87,24 @@ public class MyRedisService implements RedisService {
     public void setCurrentNode(ClusterNode node) {
         this.currentNode = node;
 
-        // Initialize replication handler after node is set
+        // 根据节点类型和集群配置初始化复制处理器
         if (ENABLE_REPLICATION && node != null && node.isMaster()) {
-            this.replicationHandler = new ReplicationHandler(node);
+            if (cluster != null && cluster.isShardingEnabled()) {
+                // 分片模式下，使用全连接网络的复制处理
+                this.replicationHandler = new ReplicationHandler(node);
+                logger.debug("主节点 " + node.getId() + " 在分片模式下初始化复制处理器");
+            } else {
+                // 非分片模式下，采用标准Redis主从复制模式
+                this.replicationHandler = new ReplicationHandler(node);
+                logger.debug("主节点 " + node.getId() + " 在主从模式下初始化复制处理器");
+            }
+            // 更新命令处理器中的复制处理器引用
+            if (commandHandler != null) {
+                commandHandler.setReplicationHandler(this.replicationHandler);
+                logger.debug("已更新命令处理器中的复制处理器引用");
+            }
+        } else if (node != null) {
+            logger.debug("节点 " + node.getId() + " 是从节点或未启用复制功能");
         }
     }
 
@@ -168,7 +187,7 @@ public class MyRedisService implements RedisService {
             bootstrap.bind(port).addListener((ChannelFuture future) -> {
                 if (future.isSuccess()) {
                     this.serverChannel = future.channel();
-                    System.out.println("Redis服务已启动，监听端口: " + port);
+                    logger.info("Redis服务已启动，监听端口: " + port);
 
                     // 添加关闭监听器
                     future.channel().closeFuture().addListener(closeFuture -> {
@@ -222,11 +241,41 @@ public class MyRedisService implements RedisService {
     public void sendMessageToNode(String toNodeId, Resp message) {
         ClusterClient client = clusterClients.get(toNodeId);
         if (client != null && client.isActive()) {  // 确保连接活跃
-            System.out.println("Sending message to node " + toNodeId);
+            // 简化日志输出，减少不必要的信息
+            if (logger.isDebugEnabled()) {
+                String cmdName = "未知命令";
+                if (message instanceof RespArray) {
+                    RespArray array = (RespArray) message;
+                    if (array.getArray().length > 0 && array.getArray()[0] instanceof BulkString) {
+                        cmdName = ((BulkString) array.getArray()[0]).getContent().toUtf8String().toUpperCase();
+                    }
+                }
+                logger.debug("向节点 " + toNodeId + " 发送命令: " + cmdName);
+            }
             client.sendMessage(message);
         } else {
-            System.err.println("No active connection to node " + toNodeId);
+            logger.warn("无法发送命令到节点 " + toNodeId + ": 连接不活跃");
         }
+    }
+
+    // 简化格式化命令的方法
+    private String formatMessage(Resp message) {
+        if (!(message instanceof RespArray)) {
+            return "非数组命令";
+        }
+        
+        RespArray commandArray = (RespArray) message;
+        Resp[] array = commandArray.getArray();
+        if (array.length == 0) {
+            return "空命令";
+        }
+        
+        // 只提取命令名称，不再显示详细参数
+        if (array[0] instanceof BulkString) {
+            return ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
+        }
+        
+        return "未知格式命令";
     }
 
     @Override

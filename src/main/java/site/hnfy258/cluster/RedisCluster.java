@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 
 public class RedisCluster implements Cluster {
     private final Map<String, ClusterNode> nodes;
@@ -52,36 +53,31 @@ public class RedisCluster implements Cluster {
 
     public void addNode(String nodeId, String ip, int port) throws IOException {
         try {
-            System.out.println("Attempting to add node: " + nodeId + " on " + ip + ":" + port);
+    
 
-            // Create node and service
             ClusterNode node = new ClusterNode(nodeId, ip, port, true);
             MyRedisService service = new MyRedisService(port);
 
-            // Initialize slaves list in node to prevent NPE
+
             if (node.getSlaves() == null) {
-                node.addSlave(null); // This will initialize the list
-                node.getSlaves().clear(); // Clear the dummy entry
+                node.addSlave(null);
+                node.getSlaves().clear(); 
             }
 
-            // Store node in the cluster
+
             nodes.put(nodeId, node);
 
-            // Set up bidirectional references
+
             service.setCluster(this);
             node.setService(service);
 
-            // Set the node in the service AFTER other initialization
-            // This ensures replicationHandler is created properly
             service.setCurrentNode(node);
 
-            // Store service in the cluster
             services.put(nodeId, service);
 
-            System.out.println("Successfully added node: " + nodeId);
         } catch (Exception e) {
             System.err.println("Failed to add node " + nodeId + ": " + e.getMessage());
-            e.printStackTrace(); // Print stack trace for better debugging
+            e.printStackTrace(); 
             throw e;
         }
     }
@@ -100,6 +96,25 @@ public class RedisCluster implements Cluster {
     }
 
     public void connectNodes() {
+        connectNodes(null);
+    }
+
+    public void connectNodes(CountDownLatch connectLatch) {
+        // 检查是否启用分片
+        if (shardingEnabled) {
+            // 分片模式下使用全连接网络
+            connectAllNodes(connectLatch);
+        } else {
+            // 非分片模式下，只从从节点连接到主节点
+            connectSlavesToMasters(connectLatch);
+        }
+    }
+
+    // 创建全连接网络 - 每个节点连接到所有其他节点
+    private void connectAllNodes(CountDownLatch connectLatch) {
+        // 计算需要建立的连接总数
+        int totalConnections = nodes.size() * (nodes.size() - 1);
+        
         // 为每个节点创建与其他节点的连接
         for (Map.Entry<String, MyRedisService> entry : services.entrySet()) {
             String currentNodeId = entry.getKey();
@@ -117,14 +132,119 @@ public class RedisCluster implements Cluster {
                         System.out.printf("Node %s successfully connected to node %s%n", currentNodeId, otherNodeId);
                         // 将client保存到当前服务的clusterClients中
                         currentService.addClusterClient(otherNodeId, client);
+                        // 如果提供了CountDownLatch，减少计数
+                        if (connectLatch != null) {
+                            connectLatch.countDown();
+                        }
                     }).exceptionally(e -> {
                         System.err.printf("Connection failed: %s -> %s: %s%n",
                                 currentNodeId, otherNodeId, e.getMessage());
+                        // 连接失败也需要减少计数
+                        if (connectLatch != null) {
+                            connectLatch.countDown();
+                        }
                         return null;
                     });
                 }
             }
         }
+    }
+
+    // 只从从节点连接到主节点 - 符合Redis原生主从架构
+    private void connectSlavesToMasters(CountDownLatch connectLatch) {
+        System.out.println("在主从模式下建立双向连接...");
+        
+        // 找出主节点和从节点
+        List<ClusterNode> slaveNodes = new ArrayList<>();
+        ClusterNode masterNode = null;
+        
+        for (ClusterNode node : nodes.values()) {
+            if (node.isMaster() && node.getSlaves() != null && !node.getSlaves().isEmpty()) {
+                masterNode = node;
+            } else if (!node.isMaster()) {
+                slaveNodes.add(node);
+            }
+        }
+        
+        if (masterNode == null || masterNode.getService() == null) {
+            System.err.println("错误：找不到主节点或主节点服务实例为空");
+            return;
+        }
+        
+        // 总连接数是双向的
+        int totalConnections = slaveNodes.size() * 2;
+        // 如果提供了CountDownLatch，使用它，否则创建新的
+        final CountDownLatch effectiveConnectLatch = connectLatch != null ? 
+                connectLatch : new CountDownLatch(totalConnections);
+        
+        MyRedisService masterService = masterNode.getService();
+        
+        // 为每个从节点建立双向连接
+        for (ClusterNode slaveNode : slaveNodes) {
+            if (slaveNode.getService() == null) continue;
+            
+            final String slaveId = slaveNode.getId();
+            final String masterId = masterNode.getId();
+            MyRedisService slaveService = slaveNode.getService();
+            
+            // 1. 从节点到主节点的连接
+            ClusterClient slave2master = new ClusterClient(masterNode.getIp(), masterNode.getPort(), slaveService.getRedisCore());
+            
+            slave2master.connect().thenRun(() -> {
+                slaveService.addClusterClient(masterId, slave2master);
+                effectiveConnectLatch.countDown();
+                
+                // 2. 主节点到从节点的连接（用于复制命令）
+                ClusterClient master2slave = new ClusterClient(slaveNode.getIp(), slaveNode.getPort(), masterService.getRedisCore());
+                
+                master2slave.connect().thenRun(() -> {
+                    masterService.addClusterClient(slaveId, master2slave);
+                    effectiveConnectLatch.countDown();
+                }).exceptionally(e -> {
+                    System.err.println("主节点连接从节点失败: " + masterId + " -> " + slaveId);
+                    effectiveConnectLatch.countDown();
+                    return null;
+                });
+                
+            }).exceptionally(e -> {
+                System.err.println("从节点连接主节点失败: " + slaveId + " -> " + masterId);
+                // 两次减少计数，因为主到从的连接也不会建立
+                effectiveConnectLatch.countDown();
+                effectiveConnectLatch.countDown();
+                return null;
+            });
+        }
+    }
+    
+    // 寻找从节点对应的主节点
+    private ClusterNode findMasterForSlave(ClusterNode slaveNode) {
+        // 遍历所有主节点
+        for (ClusterNode node : nodes.values()) {
+            if (node.isMaster() && node.getSlaves() != null) {
+                // 检查该主节点的从节点列表是否包含这个从节点
+                for (ClusterNode slave : node.getSlaves()) {
+                    if (slave != null && slave.getId().equals(slaveNode.getId())) {
+                        return node;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    // 检查主节点的从节点列表中是否包含特定从节点
+    private boolean masterHasSlave(ClusterNode master, ClusterNode slave) {
+        if (master.getSlaves() == null) {
+            return false;
+        }
+        
+        for (ClusterNode existingSlave : master.getSlaves()) {
+            if (existingSlave != null && existingSlave.getId().equals(slave.getId())) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     @Override
