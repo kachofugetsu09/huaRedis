@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 
 public class Smemebers implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Smemebers(RedisCore core) {
         this.redisCore = core;

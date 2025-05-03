@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Hdel implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper  key;
     private List<BytesWrapper> fields;
 

@@ -9,7 +9,7 @@ import site.hnfy258.datatype.RedisSet;
 import site.hnfy258.protocal.*;
 
 public class Spop implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
     int count = 1;
     public Spop(RedisCore redisCore) {

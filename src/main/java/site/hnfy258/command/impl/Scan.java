@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Set;
 
 public class Scan implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private long cursor;
     private String pattern;
     private long count;

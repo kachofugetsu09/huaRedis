@@ -16,7 +16,7 @@ import java.util.Collections;
 public class Lrem implements Command {
     private BytesWrapper key;
     private BytesWrapper value;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Lrem(RedisCore redisCore) {
         this.redisCore = redisCore;

@@ -23,7 +23,7 @@ public class Dict<K, V> {
     private DictHashTable<K, V> ht0;
     private DictHashTable<K, V> ht1;
     private int rehashIndex; // 当前rehash到的索引位置，-1表示没有在进行rehash
-    private int iterators; // 当前活跃的迭代器数量
+    private final int iterators; // 当前活跃的迭代器数量
     private final ReentrantLock lock = new ReentrantLock();
 
     /**

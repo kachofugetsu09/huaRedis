@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Srem implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
     private List<BytesWrapper> members;
     public Srem(RedisCore core) {

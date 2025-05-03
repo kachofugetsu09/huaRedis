@@ -15,7 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Zrevrange implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
     private int start;
     private int stop;

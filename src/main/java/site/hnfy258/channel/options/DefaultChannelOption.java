@@ -16,7 +16,7 @@ package site.hnfy258.channel.options;
      public DefaultChannelOption()
      {
          this.boss =  new DefaultEventLoopGroup(4, new ThreadFactory() {
-             private AtomicInteger index = new AtomicInteger(0);
+             private final AtomicInteger index = new AtomicInteger(0);
  
              @Override
              public Thread newThread(Runnable r) {
@@ -24,7 +24,7 @@ package site.hnfy258.channel.options;
              }
          });
          this.selectors = new DefaultEventLoopGroup(8, new ThreadFactory() {
-             private AtomicInteger index = new AtomicInteger(0);
+             private final AtomicInteger index = new AtomicInteger(0);
  
              @Override
              public Thread newThread(Runnable r) {

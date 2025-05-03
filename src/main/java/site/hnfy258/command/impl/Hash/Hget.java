@@ -11,7 +11,7 @@ import site.hnfy258.protocal.Errors;
 import site.hnfy258.protocal.Resp;
 
 public class Hget implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper  key;
     private BytesWrapper field;
 

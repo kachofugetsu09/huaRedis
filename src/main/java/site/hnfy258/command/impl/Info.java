@@ -17,7 +17,7 @@ import java.util.Optional;
 public class Info implements Command
  {
 
-     private RedisCore redisCore;
+     private final RedisCore redisCore;
 
      public Info(RedisCore redisCore)
      {

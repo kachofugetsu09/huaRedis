@@ -17,7 +17,7 @@ import java.util.stream.Stream;
 public class Rpush implements Command {
     private BytesWrapper key;
     private List<BytesWrapper> element;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Rpush(RedisCore redisCore) {
         this.redisCore = redisCore;

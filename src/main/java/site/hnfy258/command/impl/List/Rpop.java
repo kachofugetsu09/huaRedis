@@ -16,7 +16,7 @@ import java.util.List;
 public class Rpop implements Command {
     private BytesWrapper key;
     private List<BytesWrapper> element;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Rpop(RedisCore redisCore) {
         this.redisCore = redisCore;

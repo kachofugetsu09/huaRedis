@@ -4,10 +4,10 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class ClusterNode {
-    private String id;
-    private String ip;
-    private int port;
-    private boolean isMaster;
+    private final String id;
+    private final String ip;
+    private final int port;
+    private final boolean isMaster;
     private Set<ClusterNode> slaves;
 
     public ClusterNode(String nodeId, String ip, int port, boolean isMaster) {

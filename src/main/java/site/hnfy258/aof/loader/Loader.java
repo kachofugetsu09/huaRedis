@@ -7,7 +7,7 @@ import java.io.IOException;
 public interface Loader {
     void load(String filename, RedisCore redisCore) throws IOException;
 
-    public static class LoadStats {
+    class LoadStats {
         int commandsLoaded = 0;
         int commandsFailed = 0;
     }

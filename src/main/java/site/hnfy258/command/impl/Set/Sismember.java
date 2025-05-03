@@ -14,7 +14,7 @@ import site.hnfy258.protocal.SimpleString;
 public class Sismember implements Command {
     private BytesWrapper key;
     private BytesWrapper member;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     public Sismember(RedisCore redisCore){
         this.redisCore = redisCore;
     }

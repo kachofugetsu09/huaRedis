@@ -29,7 +29,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
     private final AtomicInteger overflowCount = new AtomicInteger(0);  // 溢出计数
     private final AtomicLong totalBytesWritten = new AtomicLong(0);    // 写入总字节数
     private final AtomicLong totalFlushedBytes = new AtomicLong(0);    // 刷盘总字节数
-    private volatile long lastFlushTime = System.currentTimeMillis();  // 上次刷盘时间
+    private final long lastFlushTime = System.currentTimeMillis();  // 上次刷盘时间
     private volatile long lastResizeTime = System.currentTimeMillis(); // 上次调整大小时间
 
     // 当前活动配置
@@ -66,7 +66,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
     private static final int SEGMENT_COUNT = 8;
     private final ReentrantLock[] segmentLocks = new ReentrantLock[SEGMENT_COUNT];
     private final Condition[] segmentNotFull = new Condition[SEGMENT_COUNT];
-    private ByteBuffer[] bufferSegments = new ByteBuffer[SEGMENT_COUNT];
+    private final ByteBuffer[] bufferSegments = new ByteBuffer[SEGMENT_COUNT];
     private final AtomicInteger segmentSelector = new AtomicInteger(0);
 
     // 构造函数
@@ -217,7 +217,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                     if (currentBuffer.capacity() < requiredSpace && bufferSize < requiredSpace) {
                         // 调整缓冲区大小以适应大数据
                         int newSize = Math.min(
-                                Math.max(requiredSpace, (int) (1<<bufferSize)),
+                                Math.max(requiredSpace, 1<<bufferSize),
                                 MAX_BUFFER_SIZE
                         );
 
@@ -237,7 +237,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                     // 尝试调整缓冲区大小直接适应
                     if (requiredSpace <= MAX_BUFFER_SIZE) {
                         int newSize = Math.min(
-                                Math.max(requiredSpace, (int) (1<<bufferSize )),
+                                Math.max(requiredSpace, 1<<bufferSize),
                                 MAX_BUFFER_SIZE
                         );
 
@@ -346,7 +346,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         // 如果新缓冲区仍然空间不足，调整大小
         if (currentBuffer.remaining() < totalRequired) {
             int newSize = Math.min(
-                    Math.max(totalRequired + currentBuffer.position(), (int)(1<<bufferSize)),
+                    Math.max(totalRequired + currentBuffer.position(), 1<<bufferSize),
                     MAX_BUFFER_SIZE
             );
 

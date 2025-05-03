@@ -12,7 +12,7 @@ import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.RespInt;
 
 public class Incr implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
 
     public Incr(RedisCore redisCore) {

@@ -14,7 +14,7 @@ import java.util.Collections;
 
 public class Lpop implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Lpop(RedisCore redisCore) {
         this.redisCore = redisCore;

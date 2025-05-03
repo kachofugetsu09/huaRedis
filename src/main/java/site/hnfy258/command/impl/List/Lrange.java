@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 
 public class Lrange implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private int start;
     private int end;
 

@@ -13,7 +13,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Del implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private List<BytesWrapper> keys;
 
     public Del(RedisCore redisCore) {

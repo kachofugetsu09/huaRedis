@@ -53,12 +53,6 @@ public class RedisClusterLauncher {
             System.out.println("Shutting down Redis cluster...");
         }));
 
-        while (true) {
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                break;
-            }
-        }
+
     }
 }

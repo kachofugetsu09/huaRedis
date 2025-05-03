@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Zrangebyscore implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
     private int min;
     private int max;

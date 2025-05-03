@@ -11,7 +11,7 @@ import site.hnfy258.protocal.Errors;
 
 public class Type implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Type(RedisCore core) {
         this.redisCore = core;

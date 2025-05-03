@@ -14,7 +14,7 @@ import java.util.List;
 
 public class Llen implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Llen(RedisCore redisCore) {
         this.redisCore = redisCore;

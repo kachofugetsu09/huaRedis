@@ -36,7 +36,7 @@ public class AOFRewriter {
     //是否在重写流程
     private final AtomicBoolean isRewriting;
     //重写的buffer大小
-    private int bufferSize;
+    private final int bufferSize;
 
 
     public AOFRewriter(RedisCore redisCore, String aofFilename, int bufferSize) {
@@ -154,7 +154,7 @@ public class AOFRewriter {
             return;
         }
         try(RandomAccessFile raf = new RandomAccessFile(tempFilename,"rw");
-        FileChannel fileChannel = raf.getChannel();){
+        FileChannel fileChannel = raf.getChannel()){
             fileChannel.position(fileChannel.size());
 
             for(ByteBuffer buffer : buffers){
@@ -170,7 +170,7 @@ public class AOFRewriter {
 
     private boolean doWrite() {
         try(RandomAccessFile raf = new RandomAccessFile(tempFilename,"rw");
-            FileChannel fileChannel = raf.getChannel();
+            FileChannel fileChannel = raf.getChannel()
         ){
             ByteBuf byteBuf = Unpooled.buffer();
 

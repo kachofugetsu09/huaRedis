@@ -11,7 +11,7 @@ import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.SimpleString;
 
 public class Set implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
     private BytesWrapper value;
     private long timeout = -1;

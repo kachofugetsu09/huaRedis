@@ -5,9 +5,9 @@ import site.hnfy258.server.MyRedisService;
 
 public interface Cluster {
     
-    public void start();
+    void start();
 
-    public void stop();
+    void stop();
 
     MyRedisService getNode(String nodeId);
 

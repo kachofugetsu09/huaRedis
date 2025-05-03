@@ -735,7 +735,7 @@ public class AOFQueuePerformanceTest {
             }
 
             // 等待测试时间
-            Thread.sleep(testDurationSeconds * 1000);
+            Thread.sleep(testDurationSeconds * 1000L);
             stopTest = true;
 
             // 计算结果
@@ -862,7 +862,7 @@ public class AOFQueuePerformanceTest {
             }
 
             // 等待测试时间
-            Thread.sleep(testDurationSeconds * 1000);
+            Thread.sleep(testDurationSeconds * 1000L);
             stopTest = true;
             
 //            // 测试结束后强制执行一次刷盘，确保所有数据都被写入

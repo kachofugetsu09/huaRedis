@@ -8,7 +8,7 @@ import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.SimpleString;
 
 public class Select implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private int index;
 
     public Select(RedisCore redisCore) {

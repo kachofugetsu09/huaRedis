@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Zadd implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper key;
     private List<Double> scores;
     private List<String> members;

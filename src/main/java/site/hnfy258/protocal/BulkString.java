@@ -18,7 +18,7 @@ public class BulkString extends Resp {
 
     public static final BulkString NullBulkString = new BulkString((BytesWrapper) null);
 
-    private BytesWrapper content;
+    private final BytesWrapper content;
 
     public BulkString(BytesWrapper content) {
         this.content = content;

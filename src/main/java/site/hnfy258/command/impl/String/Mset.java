@@ -13,9 +13,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Mset implements Command {
-    private RedisCore core;
-    private List<BytesWrapper> keys;
-    private List<BytesWrapper> values;
+    private final RedisCore core;
+    private final List<BytesWrapper> keys;
+    private final List<BytesWrapper> values;
 
     public Mset(RedisCore core) {
         this.core = core;

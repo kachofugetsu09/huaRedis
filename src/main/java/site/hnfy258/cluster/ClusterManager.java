@@ -6,7 +6,7 @@ import site.hnfy258.server.MyRedisService;
 import java.io.IOException;
 
 public class ClusterManager {
-    private RedisCluster cluster;
+    private final RedisCluster cluster;
 
     public ClusterManager() {
         this.cluster = new RedisCluster();

@@ -43,7 +43,7 @@ public class MyRedisService implements RedisService {
 
     private RedisCluster cluster;
     private ClusterNode currentNode;
-    private Map<String, ClusterClient> clusterClients = new ConcurrentHashMap<>();
+    private final Map<String, ClusterClient> clusterClients = new ConcurrentHashMap<>();
     public MyCommandHandler commandHandler;
 
     private final int port;

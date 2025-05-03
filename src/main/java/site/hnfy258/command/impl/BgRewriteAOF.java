@@ -13,7 +13,7 @@ import java.util.concurrent.CompletableFuture;
 
 public class BgRewriteAOF implements Command {
     Logger logger = Logger.getLogger(BgRewriteAOF.class);
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public BgRewriteAOF(RedisCore redisCore) {
         this.redisCore = redisCore;

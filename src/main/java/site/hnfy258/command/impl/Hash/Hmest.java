@@ -15,7 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class Hmest implements Command {
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
     private BytesWrapper  key;
     private Map<BytesWrapper, BytesWrapper> fields;
 

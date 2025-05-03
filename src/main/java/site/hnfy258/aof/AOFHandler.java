@@ -35,11 +35,11 @@ public class AOFHandler {
     private final AOFBackgroundService backgroundService;  // AOF后台服务
     private AOFSyncStrategy syncStrategy;        // 同步策略
 
-    private AOFRewriter rewriter;
+    private final AOFRewriter rewriter;
     private final AtomicBoolean rewriting;
     private Thread rewriteThread;
     List<ByteBuffer> rewriteBuffer;
-    private AtomicBoolean collectingRewriteBuffer = new AtomicBoolean(false);
+    private final AtomicBoolean collectingRewriteBuffer = new AtomicBoolean(false);
 
     private CompletableFuture<Boolean> rewriteFuture;
 

@@ -12,8 +12,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class RedisCluster implements Cluster {
-    private Map<String, ClusterNode> nodes;
-    private Map<String, MyRedisService> services;
+    private final Map<String, ClusterNode> nodes;
+    private final Map<String, MyRedisService> services;
     private ShardingStrategy shardingStrategy;
     private boolean shardingEnabled;
 

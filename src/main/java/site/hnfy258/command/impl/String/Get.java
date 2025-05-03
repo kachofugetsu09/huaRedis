@@ -11,7 +11,7 @@ import site.hnfy258.RedisCore;
 
 public class Get implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Get(RedisCore redisCore) {
         this.redisCore = redisCore;

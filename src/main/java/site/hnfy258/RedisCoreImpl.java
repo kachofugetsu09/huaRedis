@@ -18,7 +18,7 @@ public class RedisCoreImpl implements RedisCore {
     private final Map<Channel, BytesWrapper> clientNames;
     private RDBHandler rdbHandler;
 
-    private MyRedisService redisService;
+    private final MyRedisService redisService;
 
 
     public RedisCoreImpl(int dbNum, MyRedisService redisService) {

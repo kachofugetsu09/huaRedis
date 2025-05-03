@@ -13,7 +13,7 @@ public class RespArray extends Resp {
         }
     }
 
-    private Resp[] array;
+    private final Resp[] array;
 
     public RespArray(Resp[] array) {
         this.array = array;

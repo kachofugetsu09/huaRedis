@@ -10,7 +10,7 @@ import site.hnfy258.protocal.RespInt;
 
 public class Exist implements Command {
     private BytesWrapper key;
-    private RedisCore redisCore;
+    private final RedisCore redisCore;
 
     public Exist(RedisCore redisCore) {
         this.redisCore = redisCore;
