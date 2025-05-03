@@ -1,5 +1,6 @@
 package site.hnfy258.cluster;
 
+import site.hnfy258.RedisCoreImpl;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.protocal.BulkString;
 import site.hnfy258.protocal.Resp;
@@ -52,15 +53,35 @@ public class RedisCluster implements Cluster {
     public void addNode(String nodeId, String ip, int port) throws IOException {
         try {
             System.out.println("Attempting to add node: " + nodeId + " on " + ip + ":" + port);
+
+            // Create node and service
             ClusterNode node = new ClusterNode(nodeId, ip, port, true);
-            nodes.put(nodeId, node);
             MyRedisService service = new MyRedisService(port);
+
+            // Initialize slaves list in node to prevent NPE
+            if (node.getSlaves() == null) {
+                node.addSlave(null); // This will initialize the list
+                node.getSlaves().clear(); // Clear the dummy entry
+            }
+
+            // Store node in the cluster
+            nodes.put(nodeId, node);
+
+            // Set up bidirectional references
             service.setCluster(this);
+            node.setService(service);
+
+            // Set the node in the service AFTER other initialization
+            // This ensures replicationHandler is created properly
             service.setCurrentNode(node);
+
+            // Store service in the cluster
             services.put(nodeId, service);
+
             System.out.println("Successfully added node: " + nodeId);
         } catch (Exception e) {
             System.err.println("Failed to add node " + nodeId + ": " + e.getMessage());
+            e.printStackTrace(); // Print stack trace for better debugging
             throw e;
         }
     }
@@ -83,7 +104,6 @@ public class RedisCluster implements Cluster {
         for (Map.Entry<String, MyRedisService> entry : services.entrySet()) {
             String currentNodeId = entry.getKey();
             MyRedisService currentService = entry.getValue();
-            ClusterNode currentNode = nodes.get(currentNodeId);
 
             // 连接其他所有节点
             for (Map.Entry<String, ClusterNode> otherEntry : nodes.entrySet()) {
@@ -92,7 +112,7 @@ public class RedisCluster implements Cluster {
                     ClusterNode otherNode = otherEntry.getValue();
 
                     // 创建客户端连接
-                    ClusterClient client = new ClusterClient(otherNode.getIp(), otherNode.getPort());
+                    ClusterClient client = new ClusterClient(otherNode.getIp(), otherNode.getPort(), currentService.getRedisCore());
                     client.connect().thenRun(() -> {
                         System.out.printf("Node %s successfully connected to node %s%n", currentNodeId, otherNodeId);
                         // 将client保存到当前服务的clusterClients中

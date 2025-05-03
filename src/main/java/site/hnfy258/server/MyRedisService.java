@@ -15,6 +15,7 @@ import site.hnfy258.aof.AOFSyncStrategy;
 import site.hnfy258.cluster.ClusterClient;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.cluster.RedisCluster;
+import site.hnfy258.cluster.replication.ReplicationHandler;
 import site.hnfy258.coder.*;
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
@@ -33,13 +34,15 @@ public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改这些标志来开启或关闭AOF和RDB功能
-    private static final boolean ENABLE_AOF = true;
+    private static final boolean ENABLE_AOF = false;
     private static final boolean ENABLE_RDB = false;
+    private static final boolean ENABLE_REPLICATION = true;
 
     private static final boolean ENABLE_COMPRESSION = false;
 
     // 默认数据库数量，与Redis默认值保持一致
     private static final int DEFAULT_DB_NUM = 16;
+
 
     private RedisCluster cluster;
     private ClusterNode currentNode;
@@ -56,6 +59,9 @@ public class MyRedisService implements RedisService {
     private Channel serverChannel;
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
+
+    private  ReplicationHandler replicationHandler;
+
 
     // 添加方法管理集群连接
     public void addClusterClient(String nodeId, ClusterClient client) {
@@ -76,6 +82,11 @@ public class MyRedisService implements RedisService {
 
     public void setCurrentNode(ClusterNode node) {
         this.currentNode = node;
+
+        // Initialize replication handler after node is set
+        if (ENABLE_REPLICATION && node != null && node.isMaster()) {
+            this.replicationHandler = new ReplicationHandler(node);
+        }
     }
 
     public MyRedisService(int port) throws IOException {
@@ -104,6 +115,11 @@ public class MyRedisService implements RedisService {
         } else {
             this.aofHandler = null;
         }
+
+        // Initialize replicationHandler as null first
+        this.replicationHandler = null;
+        // ReplicationHandler will be properly initialized after the node is set
+        // This prevents NullPointerException during initialization
     }
 
     @Override
@@ -122,7 +138,7 @@ public class MyRedisService implements RedisService {
             }
 
             // 创建统一的命令处理器
-            this.commandHandler = new MyCommandHandler(redisCore, aofHandler, rdbHandler);
+            this.commandHandler = new MyCommandHandler(redisCore, aofHandler, rdbHandler,replicationHandler);
 
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
@@ -206,6 +222,7 @@ public class MyRedisService implements RedisService {
     public void sendMessageToNode(String toNodeId, Resp message) {
         ClusterClient client = clusterClients.get(toNodeId);
         if (client != null && client.isActive()) {  // 确保连接活跃
+            System.out.println("Sending message to node " + toNodeId);
             client.sendMessage(message);
         } else {
             System.err.println("No active connection to node " + toNodeId);
@@ -234,9 +251,6 @@ public class MyRedisService implements RedisService {
         return this.currentNode;
     }
 
-    public MyCommandHandler getCommandHandler() {
-        return this.commandHandler;
-    }
 
     public AOFHandler getAofHandler() {
         return this.aofHandler;

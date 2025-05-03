@@ -7,6 +7,7 @@ import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.aof.AOFHandler;
 import site.hnfy258.cluster.RedisCluster;
+import site.hnfy258.cluster.replication.ReplicationHandler;
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
 import site.hnfy258.datatype.BytesWrapper;
@@ -26,6 +27,10 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
     private final AOFHandler aofHandler;
     private final RDBHandler rdbHandler;
 
+    private final ReplicationHandler replicationHandler;
+
+
+
     // 使用EnumSet提高查找效率
     private static final Set<CommandType> WRITE_COMMANDS = EnumSet.of(
             CommandType.SET, CommandType.DEL, CommandType.INCR, CommandType.MSET,
@@ -35,11 +40,11 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
             CommandType.ZADD, CommandType.ZREM,CommandType.SELECT
     );
 
-    public MyCommandHandler(RedisCore redisCore, AOFHandler aofHandler, RDBHandler rdbHandler) {
+    public MyCommandHandler(RedisCore redisCore, AOFHandler aofHandler, RDBHandler rdbHandler, ReplicationHandler replicationHandler) {
         this.redisCore = redisCore;
         this.aofHandler = aofHandler;
         this.rdbHandler = rdbHandler;
-
+        this.replicationHandler = replicationHandler;
 
     }
 
@@ -89,6 +94,11 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
            if (aofHandler != null && WRITE_COMMANDS.contains(commandType)){
                 aofHandler.append(commandArray);
             }
+
+           if(replicationHandler != null && WRITE_COMMANDS.contains(commandType)){
+               replicationHandler.handle(commandArray);
+               System.out.println("replicationHandler send command"+ commandArray);
+           }
 
             return result;
         } catch (Exception e) {

@@ -1,5 +1,6 @@
 package site.hnfy258;
 
+import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.cluster.RedisCluster;
 import site.hnfy258.server.MyRedisService;
 
@@ -22,10 +23,23 @@ public class RedisClusterLauncher {
         try {
             LATCH.await(); // 等待所有节点启动
             System.out.println("All nodes started. Cluster is ready.");
-            
-            // 初始化分片
-            cluster.initializeSharding();
-            System.out.println("Sharding initialized.");
+
+            ClusterNode master =  cluster.getNode("node1").getCurrentNode();
+            master.setMaster(true);
+            ClusterNode slave1 = cluster.getNode("node2").getCurrentNode();
+            ClusterNode slave2 = cluster.getNode("node3").getCurrentNode();
+            ClusterNode slave3 = cluster.getNode("node4").getCurrentNode();
+
+            master.addSlave(slave1);
+            master.addSlave(slave2);
+            master.addSlave(slave3);
+
+            cluster.connectNodes();
+
+
+//            // 初始化分片
+//            cluster.initializeSharding();
+//            System.out.println("Sharding initialized.");
 
             // 保持程序运行
             keepRunning();
