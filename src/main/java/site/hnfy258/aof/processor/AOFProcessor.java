@@ -9,9 +9,8 @@ import site.hnfy258.utils.DoubleBufferBlockingQueue;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -23,7 +22,7 @@ public class AOFProcessor implements Processor {
     private final DoubleBufferBlockingQueue bufferQueue;    // 双缓冲队列
     private final Writer writer;                            // 文件写入器
     private final AtomicBoolean running;                    // 运行状态标志
-
+    private final AtomicLong appendedBytes = new AtomicLong(0);  // 统计已追加字节数
 
     private final int batchSize;
     private ByteBuf batchBuffer;
@@ -48,24 +47,20 @@ public class AOFProcessor implements Processor {
 
     @Override
     public void append(Resp command) {
-        // 如果不在运行状态，不处理命令
-        if (!running.get()) {
+        // 如果不在运行状态或命令为空，不处理
+        if (!running.get() || command == null) {
             return;
         }
 
         try {
             batchLock.lock();
             try {
-                // 估计命令大小，如果超过批处理缓冲区大小，直接写入
+                // 估计命令大小
                 int estimatedSize = estimateCommandSize(command);
 
+                // 处理大命令，直接写入队列
                 if (estimatedSize > batchSize) {
-                    // 命令太大，单独处理
-                    ByteBuf buf = Unpooled.directBuffer(estimatedSize);
-                    command.write(command, buf);
-                    ByteBuffer byteBuffer = buf.nioBuffer();
-                    bufferQueue.put(byteBuffer);
-                    buf.release();
+                    handleLargeCommand(command, estimatedSize);
                     return;
                 }
 
@@ -77,9 +72,11 @@ public class AOFProcessor implements Processor {
                 // 将命令写入批处理缓冲区
                 int writerIndex = batchBuffer.writerIndex();
                 command.write(command, batchBuffer);
+                int bytesWritten = batchBuffer.writerIndex() - writerIndex;
+                appendedBytes.addAndGet(bytesWritten);
 
-                // 如果批处理缓冲区已满，刷新
-                if (batchBuffer.writableBytes() < batchSize / 10) { // 剩余不足10%时刷新
+                // 如果批处理缓冲区剩余空间不足10%，刷新
+                if (batchBuffer.writableBytes() < batchSize / 10) {
                     flushBatch();
                 }
             } finally {
@@ -93,20 +90,37 @@ public class AOFProcessor implements Processor {
         }
     }
 
+    /**
+     * 处理大命令，直接写入队列
+     */
+    private void handleLargeCommand(Resp command, int estimatedSize) throws InterruptedException {
+        ByteBuf buf = Unpooled.directBuffer(estimatedSize);
+        try {
+            command.write(command, buf);
+            int actualSize = buf.readableBytes();
+            appendedBytes.addAndGet(actualSize);
 
-    private int estimateCommandSize(Resp command) {
-        if (command == null) {
-            return 0;
+            ByteBuffer byteBuffer = buf.nioBuffer();
+            bufferQueue.put(byteBuffer);
+        } finally {
+            buf.release();
         }
+    }
 
-        return 128;
+
+    /**
+     * 估计命令大小，简化版本直接返回固定值
+     */
+    private int estimateCommandSize(Resp command) {
+        return command == null ? 0 : 128;
     }
 
     /**
      * 刷新批处理缓冲区
      */
     private void flushBatch() throws InterruptedException {
-        if ( batchBuffer == null||batchBuffer.readableBytes() <= 0) {
+        // 如果缓冲区为空或无数据，直接返回
+        if (batchBuffer == null || batchBuffer.readableBytes() <= 0) {
             return;
         }
 
@@ -123,29 +137,25 @@ public class AOFProcessor implements Processor {
     @Override
     public void flush() throws IOException {
         try {
+            // 刷新批处理缓冲区
             batchLock.lock();
             try {
-                // 刷新批处理缓冲区
                 flushBatch();
             } finally {
                 batchLock.unlock();
             }
 
-            // 从双缓冲队列中获取待写入的缓冲区
+            // 从双缓冲队列中获取待写入的缓冲区并写入文件
             ByteBuffer buffer = bufferQueue.poll();
-
             if (buffer != null && buffer.hasRemaining()) {
-                try {
-                    // 将缓冲区写入文件
-                    writer.write(buffer);
-                } catch (IOException e) {
-                    logger.error("AOFProcessor.flush() IO error", e);
-                    throw e;
-                }
+                writer.write(buffer);
             }
         } catch (InterruptedException e) {
             logger.error("AOFProcessor.flush() interrupted", e);
             Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            logger.error("AOFProcessor.flush() IO error", e);
+            throw e;
         }
     }
 
@@ -154,18 +164,18 @@ public class AOFProcessor implements Processor {
         // 停止处理器
         if (running.compareAndSet(true, false)) {
             try {
+                // 确保所有批处理数据都被刷新
                 batchLock.lock();
                 try {
-                    // 确保所有批处理数据都被刷新
                     flushBatch();
+
+                    // 释放资源
+                    if (batchBuffer != null) {
+                        batchBuffer.release();
+                        batchBuffer = null;
+                    }
                 } finally {
                     batchLock.unlock();
-                }
-
-                // 释放资源
-                if (batchBuffer != null) {
-                    batchBuffer.release();
-                    batchBuffer = null;
                 }
             } catch (Exception e) {
                 logger.error("Error during AOFProcessor shutdown", e);
@@ -176,6 +186,13 @@ public class AOFProcessor implements Processor {
     @Override
     public boolean isRunning() {
         return running.get();
+    }
+
+    /**
+     * 获取已追加的字节数，用于监控
+     */
+    public long getAppendedBytes() {
+        return appendedBytes.get();
     }
 
     /**

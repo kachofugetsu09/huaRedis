@@ -66,23 +66,25 @@ public class AOFBackgroundService {
     public void stop() {
         // 1. 停止处理器
         processor.stop();
+
         //2. 停止同步线程
-        if(syncThread.isAlive() && !syncThread.isInterrupted()){
+        if(syncThread != null && syncThread.isAlive() && !syncThread.isInterrupted()){
             syncThread.interrupt();
             try{
                 syncThread.join(3000);
-                logger.info("AOFBackgroundService.stop()");
+                logger.info("AOFBackgroundService.stop(): 同步线程已停止");
             }catch(InterruptedException e){
-                logger.error("AOFBackgroundService.stop()", e);
+                logger.error("AOFBackgroundService.stop(): 等待同步线程终止时被中断", e);
                 Thread.currentThread().interrupt();
             }
         }
+
         //3.确保最后一次刷盘
         try{
             processor.flush();
+            logger.info("AOFBackgroundService.stop(): 最终刷盘完成");
         }catch(IOException e){
-            logger.error("AOFBackgroundService.stop()");
+            logger.error("AOFBackgroundService.stop(): 最终刷盘失败", e);
         }
-
     }
 }

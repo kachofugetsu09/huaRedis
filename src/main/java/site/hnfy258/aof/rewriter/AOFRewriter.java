@@ -18,6 +18,7 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -108,23 +109,42 @@ public class AOFRewriter {
 
         // 删除已存在的备份文件
         if (backupFile.exists()) {
-            backupFile.delete();
+            if (!backupFile.delete()) {
+                logger.warn("无法删除备份文件: " + backupFile.getAbsolutePath());
+            }
         }
 
-        // 如果目标文件存在，将其重命名为备份
+        // 如果目标文件存在，先尝试删除它
         if (targetFile.exists()) {
-            if (!targetFile.renameTo(backupFile)) {
-                logger.warn("无法创建备份文件，将使用复制方式替换");
+            if (!targetFile.delete()) {
+                logger.warn("无法删除目标文件: " + targetFile.getAbsolutePath());
+                // 如果无法删除，尝试重命名为备份
+                if (!targetFile.renameTo(backupFile)) {
+                    logger.warn("无法创建备份文件，将使用复制方式替换");
+                    // 如果重命名也失败，则尝试使用REPLACE_EXISTING选项
+                    Files.copy(tempFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    tempFile.delete();
+                    return;
+                }
             }
         }
 
         // 复制临时文件到目标位置
-        Files.copy(tempFile.toPath(), targetFile.toPath());
-        tempFile.delete();
+        try {
+            Files.copy(tempFile.toPath(), targetFile.toPath());
+            tempFile.delete();
+        } catch (IOException e) {
+            logger.error("复制文件失败", e);
+            // 如果复制失败，尝试使用REPLACE_EXISTING选项
+            Files.copy(tempFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            tempFile.delete();
+        }
 
         // 操作成功后删除备份
         if (backupFile.exists()) {
-            backupFile.delete();
+            if (!backupFile.delete()) {
+                logger.warn("无法删除备份文件: " + backupFile.getAbsolutePath());
+            }
         }
     }
 

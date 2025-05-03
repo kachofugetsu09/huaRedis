@@ -81,12 +81,22 @@ public class AOFHandler {
         // 将命令交给处理器，处理器会从对应的Command队列中获取命令
         processor.append(command);
 
-        if(collectingRewriteBuffer.get() && rewriteBuffer != null){
-            ByteBuf buf = Unpooled.directBuffer();
-            command.write(command, buf);
-            ByteBuffer byteBuffer = buf.nioBuffer();
-            rewriteBuffer.add(byteBuffer);
-            buf.release();
+        // 使用同步块确保线程安全
+        if(collectingRewriteBuffer.get()) {
+            synchronized(this) {
+                if(rewriteBuffer != null) {
+                    ByteBuf buf = Unpooled.directBuffer();
+                    try {
+                        command.write(command, buf);
+                        ByteBuffer byteBuffer = buf.nioBuffer();
+                        rewriteBuffer.add(byteBuffer);
+                    } catch (Exception e) {
+                        logger.error("Error adding command to rewrite buffer", e);
+                    } finally {
+                        buf.release();
+                    }
+                }
+            }
         }
     }
 
@@ -169,20 +179,23 @@ public class AOFHandler {
 
 
 
-    public void startRewriteBuffer() {
+    public synchronized void startRewriteBuffer() {
         rewriteBuffer = Collections.synchronizedList(new ArrayList<>());
         collectingRewriteBuffer.set(true);
+        logger.info("AOF重写缓冲区已启用");
     }
 
 
-    public void discardRewriteBuffer() {
+    public synchronized void discardRewriteBuffer() {
         collectingRewriteBuffer.set(false);
         rewriteBuffer = null;
+        logger.info("AOF重写缓冲区已丢弃");
     }
 
-    public List<ByteBuffer> stopRewriteBufferAndGet() {
+    public synchronized List<ByteBuffer> stopRewriteBufferAndGet() {
         collectingRewriteBuffer.set(false);
         List<ByteBuffer> result = rewriteBuffer;
+        logger.info("AOF重写缓冲区已停止，收集了 " + (result != null ? result.size() : 0) + " 个命令");
         rewriteBuffer = null;
         return result;
     }
