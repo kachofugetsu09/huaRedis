@@ -14,6 +14,8 @@ import site.hnfy258.protocal.*;
 import site.hnfy258.rdb.core.RDBHandler;
 import site.hnfy258.server.MyRedisService;
 
+import java.io.IOException;
+import java.net.SocketException;
 import java.util.EnumSet;
 import java.util.Set;
 
@@ -143,8 +145,55 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
     }
 
     @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        // 客户端断开连接时调用
+        if (logger.isDebugEnabled()) {
+            logger.debug("Client disconnected: " + ctx.channel().remoteAddress());
+        }
+        // 调用父类方法确保事件传播
+        ctx.fireChannelInactive();
+    }
+
+    @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Error in command handler", cause);
-        ctx.writeAndFlush(new Errors("ERR " + cause.getMessage()));
+        // 检查是否是客户端断开连接导致的异常
+        if (isClientDisconnectException(cause)) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Client connection closed: " + ctx.channel().remoteAddress(), cause);
+            }
+        } else {
+            // 其他类型的异常仍然记录为错误
+            logger.error("Error in command handler", cause);
+            // 只有在通道仍然活跃时才尝试写入响应
+            if (ctx.channel().isActive()) {
+                ctx.writeAndFlush(new Errors("ERR " + cause.getMessage()));
+            }
+        }
+        // 如果连接已经不可用，关闭它
+        if (!ctx.channel().isActive()) {
+            ctx.close();
+        }
+    }
+
+    /**
+     * 判断异常是否是由客户端断开连接引起的
+     *
+     * @param cause 异常
+     * @return 如果是连接断开异常返回true
+     */
+    private boolean isClientDisconnectException(Throwable cause) {
+        if (cause instanceof IOException) {
+            String message = cause.getMessage();
+            // 检查各种可能的连接断开消息
+            return message != null && (
+                message.contains("Connection reset by peer") ||
+                message.contains("远程主机强迫关闭了一个现有的连接") ||
+                message.contains("Broken pipe") ||
+                message.contains("Connection refused") ||
+                message.contains("Connection closed") ||
+                cause instanceof SocketException
+            );
+        }
+        return false;
     }
 }

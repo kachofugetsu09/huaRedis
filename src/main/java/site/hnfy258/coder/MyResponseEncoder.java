@@ -16,6 +16,7 @@ public class MyResponseEncoder extends MessageToByteEncoder<Resp> {
             ////logger.info("Encoded response: " + ByteBufUtil.hexDump(out));
         } catch(Exception e) {
             logger.error("编码异常: " + e.getMessage());
+            ctx.fireExceptionCaught(e);
             ctx.close();
         }
     }

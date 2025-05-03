@@ -23,6 +23,7 @@ public class MyDecoder extends ByteToMessageDecoder {
                     out.add(decoded);
                 } catch (Exception e) {
                     logger.error("解码异常: " + e.getMessage());
+                    ctx.fireExceptionCaught(e);
                     in.resetReaderIndex();
                 }
             }

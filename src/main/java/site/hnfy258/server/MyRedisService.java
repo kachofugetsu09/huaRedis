@@ -1,5 +1,6 @@
 package site.hnfy258.server;
 
+import com.sun.corba.se.impl.presentation.rmi.ExceptionHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
@@ -14,10 +15,7 @@ import site.hnfy258.aof.AOFSyncStrategy;
 import site.hnfy258.cluster.ClusterClient;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.cluster.RedisCluster;
-import site.hnfy258.coder.CompressionCoedC;
-import site.hnfy258.coder.MyCommandHandler;
-import site.hnfy258.coder.MyDecoder;
-import site.hnfy258.coder.MyResponseEncoder;
+import site.hnfy258.coder.*;
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
 import site.hnfy258.aof.AOFHandler;
@@ -146,6 +144,7 @@ public class MyRedisService implements RedisService {
                                 pipeline.addLast(new CompressionCoedC());
                             }
                             pipeline.addLast(commandExecutor, commandHandler);
+                            pipeline.addLast(new GlobalExceptionHandler());
                         }
                     });
 

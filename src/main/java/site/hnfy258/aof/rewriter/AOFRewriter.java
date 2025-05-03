@@ -50,7 +50,7 @@ public class AOFRewriter {
         return !isRewriting.get();
     }
 
-    List<ByteBuffer> rewriteByffer;
+    List<ByteBuffer> rewriteBuffer;
 
     public boolean rewrite(){
         if(!isRewriting.compareAndSet(false,true)){
@@ -59,7 +59,7 @@ public class AOFRewriter {
         }
 
         try{
-            rewriteByffer = Collections.synchronizedList(new ArrayList<>());
+            rewriteBuffer = Collections.synchronizedList(new ArrayList<>());
 
             redisCore.getRedisService().getAofHandler().startRewriteBuffer();
 
@@ -97,24 +97,34 @@ public class AOFRewriter {
         }
     }
 
-    private void atomicReplaceFile(File tempFile, File file) throws IOException {
-        if(!tempFile.renameTo(file)){
-            File backup = new File(file.getAbsolutePath() + ".bak");
-            if(file.exists()){
-                if(backup.exists()){
-                    backup.delete();
-                }
-                file.renameTo(backup);
-            }
+    private void atomicReplaceFile(File tempFile, File targetFile) throws IOException {
+        // 尝试直接重命名（在大多数系统上是原子操作）
+        if (tempFile.renameTo(targetFile)) {
+            return;
+        }
 
-            if(!tempFile.renameTo(tempFile)){
-                Files.copy(tempFile.toPath(), file.toPath());
-                tempFile.delete();
-            }
+        // 如果直接重命名失败，使用备份策略
+        File backupFile = new File(targetFile.getAbsolutePath() + ".bak");
 
-            if(backup.exists()){
-                backup.delete();
+        // 删除已存在的备份文件
+        if (backupFile.exists()) {
+            backupFile.delete();
+        }
+
+        // 如果目标文件存在，将其重命名为备份
+        if (targetFile.exists()) {
+            if (!targetFile.renameTo(backupFile)) {
+                logger.warn("无法创建备份文件，将使用复制方式替换");
             }
+        }
+
+        // 复制临时文件到目标位置
+        Files.copy(tempFile.toPath(), targetFile.toPath());
+        tempFile.delete();
+
+        // 操作成功后删除备份
+        if (backupFile.exists()) {
+            backupFile.delete();
         }
     }
 
