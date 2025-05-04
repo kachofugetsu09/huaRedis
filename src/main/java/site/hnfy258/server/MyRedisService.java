@@ -251,7 +251,6 @@ public class MyRedisService implements RedisService {
     public void sendMessageToNode(String toNodeId, Resp message) {
         ClusterClient client = clusterClients.get(toNodeId);
         if (client != null && client.isActive()) {  // 确保连接活跃
-            // 简化日志输出，减少不必要的信息
             if (logger.isDebugEnabled()) {
                 String cmdName = "未知命令";
                 if (message instanceof RespArray) {
