@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 
 public class ReplicationHandler {
@@ -49,42 +50,7 @@ public class ReplicationHandler {
                    ", 从节点数=" + (masterNode.getSlaves() != null ? masterNode.getSlaves().size() : 0));
     }
 
-    // 获取命令的可读表示
-    public String formatCommand(RespArray commandArray) {
-        if (commandArray == null || commandArray.getArray().length == 0) {
-            return "[]";
-        }
-        
-        Resp[] array = commandArray.getArray();
-        StringBuilder sb = new StringBuilder();
-        
-        // 尝试获取命令名称
-        if (array[0] instanceof BulkString) {
-            String cmdName = ((BulkString) array[0]).getContent().toUtf8String();
-            sb.append(cmdName.toUpperCase());
-            
-            // 添加参数
-            for (int i = 1; i < array.length && i < 4; i++) { // 最多显示前3个参数
-                if (array[i] instanceof BulkString) {
-                    sb.append(" ").append(((BulkString) array[i]).getContent().toUtf8String());
-                } else {
-                    sb.append(" [非字符串参数]");
-                }
-            }
-            
-            // 如果参数太多，显示省略号
-            if (array.length > 4) {
-                sb.append(" ...");
-            }
-            
-            // 显示总参数数量
-            sb.append(" (共").append(array.length - 1).append("个参数)");
-        } else {
-            sb.append(commandArray.toString());
-        }
-        
-        return sb.toString();
-    }
+
 
     private boolean isSelectCommand(RespArray commandArray) {
         Resp[] array = commandArray.getArray();
@@ -125,7 +91,6 @@ public class ReplicationHandler {
 
             // 检查是否有从节点
             if (masterNode.getSlaves() == null || masterNode.getSlaves().isEmpty()) {
-                // 无需冗余日志
                 return;
             }
             
@@ -137,8 +102,8 @@ public class ReplicationHandler {
             
             if (array[0] instanceof BulkString) {
                 String cmd = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
-                
-                // 某些特定命令不需要复制
+
+                // 跳过不需复制的命令
                 if (CommandUtils.isNonReplicateCommand(cmd)) {
                     return;
                 }
@@ -149,78 +114,67 @@ public class ReplicationHandler {
                 
                 // 检查命令是否是SELECT命令
                 boolean isSelectCommand = isSelectCommand(commandArray);
-                int selectDbIndex = -1;
-                
-                // 如果是SELECT命令，获取要切换的数据库索引
-                if (isSelectCommand) {
-                    selectDbIndex = getSelectedDbIndex(commandArray);
-                }
+                final int selectDbIndex = isSelectCommand ? getSelectedDbIndex(commandArray) : -1;
 
-                // 获取命令名字用于日志记录
                 String commandName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
                 
                 // 检查是否是写命令
                 boolean isWriteCommand = CommandUtils.isWriteCommand(commandName);
                 
-                // 广播命令到所有从节点
-                int successCount = 0;
-                List<String> failedSlaves = new ArrayList<>();
+                // 异步广播命令到所有从节点
+                List<CompletableFuture<Void>> futures = new ArrayList<>();
+                List<String> slaveIds = new ArrayList<>();
                 
                 for (ClusterNode slaveNode : masterNode.getSlaves()) {
                     if (slaveNode == null) continue;
                     String slaveId = slaveNode.getId();
+                    slaveIds.add(slaveId);
                     
-                    try {
-                        // 获取从节点的客户端连接
-                        ClusterClient slaveClient = masterService.getClusterClient(slaveId);
-                        
-                        // 如果没有连接可用，跳过该从节点
-                        if (slaveClient == null || !slaveClient.isActive()) {
-                            // 简化日志，记录关键信息
-                            logger.warn("与从节点 " + slaveId + " 的连接不可用，无法复制命令 " + 
-                                      (slaveClient == null ? "(连接为空)" : "(连接不活跃)"));
-                            
-                            Map<String, ClusterClient> clients = masterService.getClusterClients();
-                            if (clients != null && !clients.isEmpty()) {
-                                logger.warn("主节点可用连接: " + String.join(", ", clients.keySet()));
-                            }
-                            
-                            failedSlaves.add(slaveId);
-                            continue;
-                        }
-                        
-                        // 获取从节点当前数据库索引，如果没有记录则默认为0
-                        Integer slaveDbIndex = slaveDbIndices.getOrDefault(slaveId, 0);
-                        
-                        // 如果是SELECT命令，直接发送并更新索引
-                        if (isSelectCommand) {
-                            slaveClient.sendMessage(commandArray);
-                            // 更新记录的从节点数据库索引
-                            slaveDbIndices.put(slaveId, selectDbIndex);
-                            successCount++;
-                        } else {
-                            // 如果数据库索引不匹配，先发送SELECT命令
-                            if (slaveDbIndex != currentDbIndex) {
-                                RespArray selectCommand = createSelectCommand(currentDbIndex);
-                                slaveClient.sendMessage(selectCommand);
-                                slaveDbIndices.put(slaveId, currentDbIndex);
-                            }
-                            
-                            // 发送实际命令
-                            slaveClient.sendMessage(commandArray);
-                            successCount++;
-                        }
-                    } catch (Exception e) {
-                        logger.error("复制命令到从节点 " + slaveId + " 失败: " + e.getMessage());
-                        failedSlaves.add(slaveId);
+                    // 获取从节点的客户端
+                    ClusterClient slaveClient = masterService.getClusterClient(slaveId);
+                    
+                    // 如果没有连接可用，跳过该从节点
+                    if (slaveClient == null || !slaveClient.isActive()) {
+                        logger.warn("与从节点 " + slaveId + " 的连接不可用，无法复制命令 " + 
+                                  (slaveClient == null ? "(连接为空)" : "(连接不活跃)"));
+                        continue;
                     }
+                    
+                    // 获取从节点当前数据库索引，默认为0
+                    final Integer slaveDbIndex = slaveDbIndices.getOrDefault(slaveId, 0);
+                    final int currentDbIndexFinal = currentDbIndex;
+                    final boolean isSelectCommandFinal = isSelectCommand;
+                    final String slaveIdFinal = slaveId;
+                    
+                    // 异步发送命令
+                    CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                        try {
+                            if (isSelectCommandFinal) {
+                                slaveClient.sendMessageAsync(commandArray);
+                                slaveDbIndices.put(slaveIdFinal, selectDbIndex);
+                            } else {
+                                // 如果数据库索引不匹配，先发送SELECT命令
+                                if (slaveDbIndex != currentDbIndexFinal) {
+                                    RespArray selectCommand = createSelectCommand(currentDbIndexFinal);
+                                    slaveClient.sendMessageAsync(selectCommand);
+                                    slaveDbIndices.put(slaveIdFinal, currentDbIndexFinal);
+                                }
+                                
+                                //真正的命令发送
+                                slaveClient.sendMessageAsync(commandArray);
+                            }
+                        } catch (Exception e) {
+                            logger.error("复制命令到从节点 " + slaveIdFinal + " 失败: " + e.getMessage());
+                        }
+                    });
+                    
+                    futures.add(future);
                 }
                 
-                // 重要命令记录复制结果
+                
+                // 重要命令记录复制状态
                 if (isWriteCommand || isSelectCommand) {
-                    logger.info("命令 " + commandName + " 复制结果: 成功=" + successCount + 
-                               ", 失败=" + failedSlaves.size() +
-                               (failedSlaves.isEmpty() ? "" : ", 失败节点: " + String.join(",", failedSlaves)));
+                    logger.info("命令 " + commandName + " 异步复制到 " + slaveIds.size() + " 个从节点");
                 }
             } else {
                 logger.warn("命令数组的第一个元素不是BulkString，无法确定命令类型");

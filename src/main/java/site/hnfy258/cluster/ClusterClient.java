@@ -12,6 +12,7 @@ import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
 import site.hnfy258.command.Command;
 import site.hnfy258.command.CommandType;
+import site.hnfy258.command.CommandUtils;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
 import site.hnfy258.protocal.BulkString;
@@ -93,6 +94,23 @@ public class ClusterClient {
         }
     }
 
+   //异步发送消息到从节点
+    public CompletableFuture<Void> sendMessageAsync(Resp resp) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        if (channel != null && channel.isActive()) {
+            channel.writeAndFlush(resp).addListener(f -> {
+                if (f.isSuccess()) {
+                    future.complete(null);
+                } else {
+                    future.completeExceptionally(f.cause());
+                }
+            });
+        } else {
+            future.completeExceptionally(new IllegalStateException("Channel is not active. Cannot send message."));
+        }
+        return future;
+    }
+
     public void disconnect() {
         if (channel != null) {
             channel.close();
@@ -142,18 +160,10 @@ public class ClusterClient {
                                            "SCAN".equals(commandName);
                 
                 // 始终记录写命令的处理
-                boolean isImportantCommand = commandName.equals("SET") || 
-                                            commandName.equals("ZADD") || 
-                                            commandName.equals("RPUSH") ||
-                                            commandName.equals("LPUSH") ||
-                                            commandName.equals("SADD") ||
-                                            commandName.equals("HSET") ||
-                                            commandName.equals("DEL") ||
-                                            commandName.equals("RPOP") ||
-                                            commandName.equals("LPOP");
+                boolean isImportantCommand = CommandUtils.isWriteCommand(commandName);
                 
                 // 记录详细日志，特别是写命令
-                if (!isFrequentCommand || isImportantCommand) {
+                if (isImportantCommand) {
                     logger.info("从节点收到命令: " + formatCommand(commandArray) + 
                                 ", 当前DB: " + currentDbIndex + 
                                 ", RedisCore DB: " + redisCore.getCurrentDBIndex());
@@ -171,14 +181,11 @@ public class ClusterClient {
                 if (commandType == CommandType.SELECT) {
                     if (array.length > 1 && array[1] instanceof BulkString) {
                         try {
-                            // 获取新的数据库索引
                             String indexStr = ((BulkString) array[1]).getContent().toUtf8String();
                             int newDbIndex = Integer.parseInt(indexStr);
-                            
-                            // 更新当前索引
+
                             currentDbIndex = newDbIndex;
-                            
-                            // 执行SELECT命令
+
                             redisCore.selectDB(currentDbIndex);
                             logger.info("从节点切换到数据库: " + currentDbIndex);
                             
@@ -194,13 +201,12 @@ public class ClusterClient {
                         return new Errors("ERR wrong number of arguments for 'select' command");
                     }
                 }
-                
-                // 对于所有其他命令，始终强制确保在正确的数据库上下文中
+
                 try {
                     // 获取Redis核心当前数据库索引
                     int currentRedisDbIndex = redisCore.getCurrentDBIndex();
                     
-                    // 确保Redis核心处于正确的数据库上下文
+                    // 确保数据保存所在的数据库索引一致
                     if (currentRedisDbIndex != currentDbIndex) {
                         logger.info("从节点数据库索引不一致，强制同步: " + currentRedisDbIndex + " -> " + currentDbIndex);
                         redisCore.selectDB(currentDbIndex);
@@ -237,8 +243,7 @@ public class ClusterClient {
                 Command command = commandType.getSupplier().apply(redisCore);
                 command.setContext(array);
                 Resp result = command.handle();
-                
-                // 对于写命令，记录命令执行后的状态
+
                 if (isImportantCommand) {
                     try {
                         if (array.length > 1) {
@@ -253,17 +258,9 @@ public class ClusterClient {
                         logger.warn("读取更新后键值数据失败: " + e.getMessage());
                     }
                 }
-                
-                // 只有非频繁执行的命令才记录执行完成日志
+
                 if (!isFrequentCommand) {
                     logger.info("从节点执行命令完成: " + commandName + ", 结果类型: " + result.getClass().getSimpleName());
-                }
-                
-                // 命令执行完后，再次检查数据库索引，确保没有意外变化
-                int afterCmdDbIndex = redisCore.getCurrentDBIndex();
-                if (afterCmdDbIndex != currentDbIndex) {
-                    logger.warn("命令执行导致数据库索引变化: " + currentDbIndex + " -> " + afterCmdDbIndex + "，正在恢复");
-                    redisCore.selectDB(currentDbIndex);
                 }
                 
                 return result;
@@ -286,7 +283,7 @@ public class ClusterClient {
         }
     }
 
-    // 辅助方法：将命令数组转换为可读字符串
+    // 将命令数组转换为可读字符串
     private static String formatCommand(RespArray commandArray) {
         if (commandArray == null || commandArray.getArray().length == 0) {
             return "[]";
