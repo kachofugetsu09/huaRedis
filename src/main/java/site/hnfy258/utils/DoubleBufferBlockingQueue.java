@@ -23,13 +23,12 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
     private static final float HIGH_WATER_MARK = 0.75f;     // 高水位线(触发扩容)
     private static final float LOW_WATER_MARK = 0.25f;      // 低水位线(触发缩容)
 
-
-    // 简化的性能指标
+    // 性能指标
     private final AtomicInteger resizeCount = new AtomicInteger(0);    // 调整大小计数
     private final AtomicInteger overflowCount = new AtomicInteger(0);  // 溢出计数
     private final AtomicLong totalBytesWritten = new AtomicLong(0);    // 写入总字节数
     private final AtomicLong totalFlushedBytes = new AtomicLong(0);    // 刷盘总字节数
-    private final long lastFlushTime = System.currentTimeMillis();  // 上次刷盘时间
+    private volatile long lastFlushTime = System.currentTimeMillis();  // 上次刷盘时间
     private volatile long lastResizeTime = System.currentTimeMillis(); // 上次调整大小时间
 
     // 当前活动配置
@@ -37,37 +36,29 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
     private ByteBuffer currentBuffer;
     private ByteBuffer flushingBuffer;
 
+    // 锁和条件变量
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition notFull = lock.newCondition();
     private final Condition notEmpty = lock.newCondition();
 
+    // 队列状态
     private volatile boolean closed = false;
-
     private volatile long writePosition = 0;
     private volatile long flushPosition = 0;
 
-
-    // 新增的类成员变量
-    private static final int INITIAL_BATCH_SIZE = 64;       // 初始批量大小
-    private static final int MAX_BATCH_SIZE = 128;          // 最大批量大小
-    private volatile int currentBatchSize = INITIAL_BATCH_SIZE;
-
-    // 小数据缓存队列 - 用于优化小数据处理
+    // 小数据处理优化
+    private static final int SMALL_DATA_THRESHOLD = 1024;   // 小数据阈值(字节)
+    private static final int MAX_SMALL_DATA_QUEUE_SIZE = 10 * 1024 * 1024; // 10MB
     private final ConcurrentLinkedQueue<ByteBuffer> smallDataQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger smallDataQueueSize = new AtomicInteger(0);
     private final AtomicInteger smallDataCount = new AtomicInteger(0);
-    private static final int SMALL_DATA_THRESHOLD = 1024;   // 小数据阈值(字节)
-    private static final int MAX_SMALL_DATA_QUEUE_SIZE = 10 * 1024 * 1024; // 10MB
 
-    // 批量计数器
+    // 批处理配置
+    private static final int INITIAL_BATCH_SIZE = 64;
+    private static final int MAX_BATCH_SIZE = 128;
+    private volatile int currentBatchSize = INITIAL_BATCH_SIZE;
     private final AtomicInteger batchCounter = new AtomicInteger(0);
     private volatile long lastBatchTime = System.currentTimeMillis();
-
-    private static final int SEGMENT_COUNT = 8;
-    private final ReentrantLock[] segmentLocks = new ReentrantLock[SEGMENT_COUNT];
-    private final Condition[] segmentNotFull = new Condition[SEGMENT_COUNT];
-    private final ByteBuffer[] bufferSegments = new ByteBuffer[SEGMENT_COUNT];
-    private final AtomicInteger segmentSelector = new AtomicInteger(0);
 
     // 构造函数
     public DoubleBufferBlockingQueue() {
@@ -78,16 +69,7 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         this.bufferSize = Math.min(Math.max(initialBufferSize, MIN_BUFFER_SIZE), MAX_BUFFER_SIZE);
         this.currentBuffer = ByteBuffer.allocateDirect(bufferSize);
         this.flushingBuffer = ByteBuffer.allocateDirect(bufferSize);
-
-        // 初始化分段锁
-        for (int i = 0; i < SEGMENT_COUNT; i++) {
-            segmentLocks[i] = new ReentrantLock();
-            segmentNotFull[i] = segmentLocks[i].newCondition();
-            bufferSegments[i] = ByteBuffer.allocateDirect(bufferSize / SEGMENT_COUNT);
-        }
     }
-
-
 
     /**
      * 处理超大数据（大于最大缓冲区大小）
@@ -96,84 +78,81 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         int requiredSpace = src.remaining();
         overflowCount.incrementAndGet();
 
+        logger.debug("处理超大数据: " + requiredSpace + " 字节");
+
         // 分片处理大数据
         ByteBuffer srcCopy = src.duplicate(); // 复制引用避免修改原始位置
         int bytesRemaining = requiredSpace;
-
-
-        int chunkSize = Math.min(MAX_BUFFER_SIZE >> 1, 8 << 20);
-
-        // 在高并发下使用独立缓冲区来减少锁争用
-        boolean highConcurrency = Thread.activeCount() > 8;
-        ByteBuffer localBuffer = null;
-
-        if (highConcurrency && requiredSpace > bufferSize / 2) {
-            // 对于极端场景，直接分配临时缓冲区而不是使用共享缓冲区
-            localBuffer = ByteBuffer.allocateDirect(Math.min(requiredSpace, MAX_BUFFER_SIZE));
-            chunkSize = localBuffer.capacity();
-        }
+        int chunkSize = Math.min(MAX_BUFFER_SIZE / 4, 4 * 1024 * 1024); // 减小分片大小，提高安全性
 
         while (bytesRemaining > 0) {
             // 计算当前分片大小
             int currentChunkSize = Math.min(bytesRemaining, chunkSize);
 
-            if (localBuffer != null) {
-                // 使用本地临时缓冲区，减少锁争用
-                int originalLimit = srcCopy.limit();
-                srcCopy.limit(srcCopy.position() + currentChunkSize);
-
-                // 在临时缓冲区外获取锁，减少持锁时间
-                localBuffer.clear();
-                localBuffer.put(srcCopy);
-                localBuffer.flip();
-
-                // 只在必要时获取锁
-                lock.lock();
-                try {
-                    // 如果当前缓冲区有数据且空间不足，先刷盘
-                    if (currentBuffer.position() > 0 && currentBuffer.remaining() < localBuffer.remaining()) {
-                        swapArea();
-                        notEmpty.signal();
-                    }
-
-                    // 写入主缓冲区
-                    int beforePos = currentBuffer.position();
-                    currentBuffer.put(localBuffer);
-                    writePosition += (currentBuffer.position() - beforePos);
-                } finally {
-                    lock.unlock();
+            lock.lock();
+            try {
+                // 如果当前缓冲区有数据且空间不足，先交换缓冲区
+                if (currentBuffer.position() > 0 && currentBuffer.remaining() < currentChunkSize) {
+                    swapBuffers();
+                    notEmpty.signal();
                 }
 
-                // 恢复源缓冲区限制
-                srcCopy.limit(originalLimit);
-            } else {
-                // 使用常规路径处理
-                lock.lock();
-                try {
-                    // 如果当前缓冲区有数据且空间不足，先刷盘
-                    if (currentBuffer.position() > 0 && currentBuffer.remaining() < currentChunkSize) {
-                        swapArea();
-                        notEmpty.signal();
+                // 确保当前缓冲区有足够空间
+                if (currentBuffer.remaining() < currentChunkSize) {
+                    // 如果新缓冲区仍然不够大，则调整大小
+                    int newSize = calculateOptimalBufferSize(currentChunkSize + currentBuffer.position());
+                    if (newSize > bufferSize) {
+                        bufferSize = newSize;
+                        resizeCount.incrementAndGet();
+                        ByteBuffer newBuffer = ByteBuffer.allocateDirect(bufferSize);
+
+                        // 复制现有数据到新缓冲区
+                        if (currentBuffer.position() > 0) {
+                            currentBuffer.flip();
+                            newBuffer.put(currentBuffer);
+                            currentBuffer.clear();
+                        }
+
+                        // 释放旧缓冲区，使用新缓冲区
+                        currentBuffer = newBuffer;
+                        logger.debug("调整缓冲区大小以容纳大数据分片: " + bufferSize + " 字节");
                     }
+                }
 
-                    // 限制源缓冲区读取量
-                    int originalLimit = srcCopy.limit();
-                    srcCopy.limit(srcCopy.position() + currentChunkSize);
+                // 限制源缓冲区读取量，确保不超过当前缓冲区剩余空间
+                int originalLimit = srcCopy.limit();
+                int safeChunkSize = Math.min(currentChunkSize, currentBuffer.remaining());
+                srcCopy.limit(srcCopy.position() + safeChunkSize);
 
-                    // 写入分片数据
+                // 写入分片数据
+                try {
                     int beforePos = currentBuffer.position();
                     currentBuffer.put(srcCopy);
-                    writePosition += (currentBuffer.position() - beforePos);
+                    int bytesWritten = currentBuffer.position() - beforePos;
+                    writePosition += bytesWritten;
+                    bytesRemaining -= bytesWritten; // 更新实际写入的字节数
 
+                    logger.debug("成功写入大数据分片: " + bytesWritten + " 字节, 剩余 " + bytesRemaining + " 字节");
+                } catch (Exception e) {
+                    logger.error("写入大数据分片失败: " + e.getMessage() +
+                              ", 源缓冲区: remaining=" + srcCopy.remaining() +
+                              ", 目标缓冲区: remaining=" + currentBuffer.remaining() +
+                              ", position=" + currentBuffer.position() +
+                              ", capacity=" + currentBuffer.capacity(), e);
+                    throw e;
+                } finally {
                     // 恢复源缓冲区限制
                     srcCopy.limit(originalLimit);
-                } finally {
-                    lock.unlock();
                 }
+            } finally {
+                lock.unlock();
             }
-
-            // 更新剩余字节数
-            bytesRemaining -= currentChunkSize;
+            
+            // 如果没有进展，等待一下并重新尝试
+            if (bytesRemaining >= requiredSpace) {
+                logger.warn("处理大数据无进展，等待一下再重试。总字节: " + requiredSpace + ", 剩余: " + bytesRemaining);
+                Thread.sleep(10); // 短暂等待
+            }
         }
     }
 
@@ -194,63 +173,33 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
             return;
         }
 
+        // 特殊处理：处理超大数据情况，超过最大缓冲区大小
+        if (requiredSpace > MAX_BUFFER_SIZE) {
+            handleOversizedData(src);
+            return;
+        }
+
         lock.lock();
         try {
             // 如果有累积的小数据，先处理它们
             flushSmallDataQueueIfNeeded(false);
 
-            // 特殊处理：处理超大数据情况，超过最大缓冲区大小
-            if (requiredSpace > MAX_BUFFER_SIZE) {
-                handleOversizedData(src);
-                return;
-            }
-
-            // 如果当前缓冲区空间不足，等待刷新或动态调整大小
+            // 如果当前缓冲区空间不足，等待或调整大小
             while (currentBuffer.remaining() < requiredSpace) {
                 // 如果当前缓冲区存在数据且需要更大的空间
                 if (currentBuffer.position() > 0) {
-                    // 主动触发交换
-                    swapArea();
+                    // 先交换缓冲区
+                    swapBuffers();
                     notEmpty.signal();
 
-                    // 检查新缓冲区是否够大，不够则调整大小
-                    if (currentBuffer.capacity() < requiredSpace && bufferSize < requiredSpace) {
-                        // 调整缓冲区大小以适应大数据
-                        int newSize = Math.min(
-                                Math.max(requiredSpace, 1<<bufferSize),
-                                MAX_BUFFER_SIZE
-                        );
-
-//                        logger.info(String.format(
-//                                "数据较大，动态调整缓冲区: 当前大小=%d, 新大小=%d, 请求空间=%d",
-//                                bufferSize, newSize, requiredSpace
-//                        ));
-
-                        bufferSize = newSize;
-                        resizeCount.incrementAndGet();
-
-                        // 创建新的更大缓冲区
-                        currentBuffer = ByteBuffer.allocateDirect(bufferSize);
+                    // 如果新缓冲区仍然不够大，则调整大小
+                    if (currentBuffer.capacity() < requiredSpace) {
+                        resizeCurrentBuffer(requiredSpace);
                     }
                 } else {
-                    // 没有数据但缓冲区仍然不足，说明请求的数据太大
-                    // 尝试调整缓冲区大小直接适应
+                    // 当前缓冲区为空但容量不足，直接调整大小
                     if (requiredSpace <= MAX_BUFFER_SIZE) {
-                        int newSize = Math.min(
-                                Math.max(requiredSpace, 1<<bufferSize),
-                                MAX_BUFFER_SIZE
-                        );
-
-//                        logger.info(String.format(
-//                                "缓冲区不足，动态调整: 当前大小=%d, 新大小=%d, 请求空间=%d",
-//                                bufferSize, newSize, requiredSpace
-//                        ));
-
-                        bufferSize = newSize;
-                        resizeCount.incrementAndGet();
-
-                        // 创建新的更大缓冲区
-                        currentBuffer = ByteBuffer.allocateDirect(bufferSize);
+                        resizeCurrentBuffer(requiredSpace);
                     } else {
                         // 如果请求空间太大，等待空间可用
                         notFull.await();
@@ -262,17 +211,13 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                 }
             }
 
-            // 记录写入前的位置，用于跟踪
-            int beforePos = currentBuffer.position();
-
             // 执行数据写入
+            int beforePos = currentBuffer.position();
             currentBuffer.put(src);
-
-            // 更新写入位置
             writePosition += (currentBuffer.position() - beforePos);
 
-            // 在每次写入后检查是否需要调整缓冲区大小
-            resizeBufferIfNeeded();
+            // 检查是否需要动态调整缓冲区大小
+            checkAndResizeBuffer();
 
             // 通知可能有数据可读
             notEmpty.signal();
@@ -281,12 +226,57 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         }
     }
 
+    /**
+     * 调整当前缓冲区大小以容纳所需空间
+     */
+    private void resizeCurrentBuffer(int requiredSpace) {
+        if (requiredSpace <= 0) {
+            return; // 防止无效的请求
+        }
+        
+        int newSize = calculateOptimalBufferSize(requiredSpace);
+
+        if (newSize > bufferSize) {
+            logger.debug("调整缓冲区大小: 从 " + bufferSize + " 字节 到 " + newSize + " 字节");
+            bufferSize = newSize;
+            resizeCount.incrementAndGet();
+            ByteBuffer newBuffer = ByteBuffer.allocateDirect(bufferSize);
+
+            // 复制现有数据到新缓冲区
+            if (currentBuffer != null && currentBuffer.position() > 0) {
+                currentBuffer.flip();
+                newBuffer.put(currentBuffer);
+            }
+
+            // 释放旧缓冲区，使用新缓冲区
+            currentBuffer = newBuffer;
+            lastResizeTime = System.currentTimeMillis();
+        }
+    }
+
+    /**
+     * 计算最佳缓冲区大小
+     */
+    private int calculateOptimalBufferSize(int requiredSpace) {
+        // 确保至少是所需空间的1.5倍，避免频繁调整
+        int minSize = (int)(requiredSpace * 1.5);
+
+        // 找到大于minSize的最小2的幂
+        int newSize = MIN_BUFFER_SIZE;
+        while (newSize < minSize && newSize < MAX_BUFFER_SIZE) {
+            newSize <<= 1; // 翻倍
+        }
+
+        return Math.min(newSize, MAX_BUFFER_SIZE);
+    }
+
+
     private void handleSmallData(ByteBuffer src) throws InterruptedException {
         if (src.remaining() <= 0) return;
 
         // 创建小数据副本并添加到队列
         ByteBuffer copy = ByteBuffer.allocate(src.remaining());
-        copy.put(src);
+        copy.put(src.duplicate());
         copy.flip();
 
         // 使用无锁并发队列添加小数据
@@ -294,11 +284,10 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         int queueSize = smallDataQueueSize.addAndGet(copy.capacity());
         smallDataCount.incrementAndGet();
 
-        // 批量处理条件：队列大小超过阈值或数量达到批处理大小
+        // 批量处理条件
         if (queueSize >= MAX_SMALL_DATA_QUEUE_SIZE/2 ||
                 smallDataCount.get() >= currentBatchSize ||
                 System.currentTimeMillis() - lastBatchTime > 5) {
-
             lock.lock();
             try {
                 flushSmallDataQueueIfNeeded(true);
@@ -320,13 +309,12 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         int count = smallDataCount.get();
         int queueSize = smallDataQueueSize.get();
 
-        // 如果队列为空，直接返回
         if (count == 0 || queueSize == 0) {
             return;
         }
 
-        // 决定是否需要刷新
-        boolean shouldFlush = force || count >= currentBatchSize ||
+        boolean shouldFlush = force ||
+                count >= currentBatchSize ||
                 queueSize >= MAX_SMALL_DATA_QUEUE_SIZE/2 ||
                 System.currentTimeMillis() - lastBatchTime > 10;
 
@@ -337,56 +325,67 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         // 计算需要的总空间
         int totalRequired = Math.min(queueSize, MAX_SMALL_DATA_QUEUE_SIZE);
 
-        // 如果当前缓冲区空间不足，触发交换
+        // 如果当前缓冲区空间不足，交换缓冲区
         if (currentBuffer.remaining() < totalRequired && currentBuffer.position() > 0) {
-            swapArea();
+            swapBuffers();
             notEmpty.signal();
         }
 
         // 如果新缓冲区仍然空间不足，调整大小
         if (currentBuffer.remaining() < totalRequired) {
-            int newSize = Math.min(
-                    Math.max(totalRequired + currentBuffer.position(), 1<<bufferSize),
-                    MAX_BUFFER_SIZE
-            );
-
-            if (newSize > bufferSize) {
-                bufferSize = newSize;
-                resizeCount.incrementAndGet();
-
-                // 创建新缓冲区并复制现有数据
-                ByteBuffer newBuffer = ByteBuffer.allocateDirect(bufferSize);
-                currentBuffer.flip();
-                newBuffer.put(currentBuffer);
-                currentBuffer = newBuffer;
-            }
+            resizeCurrentBuffer(totalRequired + currentBuffer.position());
         }
 
         // 批量处理队列中的数据
         int processedCount = 0;
         int processedBytes = 0;
+        batchCounter.incrementAndGet();
 
         ByteBuffer item;
         while ((item = smallDataQueue.poll()) != null && processedBytes < MAX_SMALL_DATA_QUEUE_SIZE) {
-            int beforePos = currentBuffer.position();
-            currentBuffer.put(item);
-            int bytesWritten = currentBuffer.position() - beforePos;
+            // 确保当前缓冲区有足够空间存放这个小数据
+            if (currentBuffer.remaining() < item.remaining()) {
+                // 如果当前项太大，先处理已有数据，然后交换缓冲区或调整大小
+                if (currentBuffer.position() > 0) {
+                    swapBuffers();
+                    notEmpty.signal();
+                }
+                
+                // 如果新缓冲区仍然不够大，调整大小
+                if (currentBuffer.remaining() < item.remaining()) {
+                    resizeCurrentBuffer(item.remaining() + currentBuffer.position());
+                }
+            }
+            
+            try {
+                int beforePos = currentBuffer.position();
+                currentBuffer.put(item);
+                int bytesWritten = currentBuffer.position() - beforePos;
 
-            // 更新写入位置
-            writePosition += bytesWritten;
-            processedBytes += bytesWritten;
-            processedCount++;
+                writePosition += bytesWritten;
+                processedBytes += bytesWritten;
+                processedCount++;
+            } catch (Exception e) {
+                logger.error("添加小数据到主缓冲区出错: " + e.getMessage() +
+                          ", 小数据大小: " + item.remaining() +
+                          ", 主缓冲区剩余: " + currentBuffer.remaining(), e);
+                
+                // 将这个项放回队列
+                smallDataQueue.offer(item);
+                break;
+            }
 
-            // 避免一次处理太多导致延迟过高
             if (processedCount >= currentBatchSize * 2) {
                 break;
             }
         }
 
         // 更新计数器
-        smallDataCount.addAndGet(-processedCount);
-        smallDataQueueSize.addAndGet(-processedBytes);
-        lastBatchTime = System.currentTimeMillis();
+        if (processedCount > 0) {
+            smallDataCount.addAndGet(-processedCount);
+            smallDataQueueSize.addAndGet(-processedBytes);
+            lastBatchTime = System.currentTimeMillis();
+        }
     }
 
     /**
@@ -396,12 +395,10 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         long now = System.currentTimeMillis();
         long timeDiff = now - lastBatchTime;
 
-        // 时间间隔过短，增加批处理大小
+        // 根据时间间隔动态调整批大小
         if (timeDiff < 5 && currentBatchSize < MAX_BATCH_SIZE) {
             currentBatchSize = Math.min(currentBatchSize + 8, MAX_BATCH_SIZE);
-        }
-        // 时间间隔过长，减少批处理大小
-        else if (timeDiff > 20 && currentBatchSize > INITIAL_BATCH_SIZE) {
+        } else if (timeDiff > 20 && currentBatchSize > INITIAL_BATCH_SIZE) {
             currentBatchSize = Math.max(currentBatchSize - 4, INITIAL_BATCH_SIZE);
         }
     }
@@ -410,18 +407,17 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
     public ByteBuffer take() throws InterruptedException {
         lock.lock();
         try {
-            // 首先尝试刷新小数据队列 - 提高响应性
+            // 先尝试刷新小数据队列
             flushSmallDataQueueIfNeeded(false);
 
             while (currentBuffer.position() == 0 && !closed) {
-                // 再次检查小数据队列 - 避免可能的竞争条件
+                // 再次检查小数据队列
                 if (smallDataCount.get() > 0) {
                     flushSmallDataQueueIfNeeded(true);
                     if (currentBuffer.position() > 0) {
                         break;
                     }
                 }
-
                 notEmpty.await();
             }
 
@@ -429,7 +425,11 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                 return null;
             }
 
-            swapArea();
+            swapBuffers();
+
+            // 更新刷盘统计
+            totalFlushedBytes.addAndGet(flushingBuffer.remaining());
+            lastFlushTime = System.currentTimeMillis();
 
             notFull.signal();
             return flushingBuffer;
@@ -438,75 +438,66 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         }
     }
 
-    private void swapArea() {
+    /**
+     * 交换写入缓冲区和刷新缓冲区
+     */
+    private void swapBuffers() {
         if (currentBuffer.position() == 0) {
-            // 无数据，不需要交换
-            return;
+            return;  // 无数据，不需要交换
         }
 
         // 准备当前缓冲区用于刷盘
         currentBuffer.flip();
 
-        // 交换缓冲区
+        // 交换缓冲区（零拷贝）
         ByteBuffer temp = flushingBuffer;
         flushingBuffer = currentBuffer;
 
         // 记录刷盘位置
         flushPosition = writePosition;
 
-        // 准备新的当前缓冲区 - 优化：重用或创建更合适大小的缓冲区
+        // 准备新的写入缓冲区
         if (temp.capacity() != bufferSize) {
             // 如果大小不匹配，创建新的合适大小的缓冲区
             currentBuffer = ByteBuffer.allocateDirect(bufferSize);
         } else {
-            // 重用之前的缓冲区
+            // 重用之前的缓冲区（零拷贝）
             temp.clear();
             currentBuffer = temp;
         }
-
-        // 通知可能在等待的读取线程
-        notEmpty.signalAll();
     }
 
     /**
-     * 改进的动态缓冲区大小调整
+     * 检查并动态调整缓冲区大小
      */
-    private void resizeBufferIfNeeded() {
+    private void checkAndResizeBuffer() {
         long now = System.currentTimeMillis();
 
         // 限制调整频率
-        if (now - lastResizeTime < 3000) { // 3秒间隔
+        if (now - lastResizeTime < 3000) {
             return;
         }
 
-        // 计算使用率
         float usageRatio = (float) currentBuffer.position() / currentBuffer.capacity();
 
-        // 计算数据增长率
+        // 计算写入速率（字节/毫秒）
         long timeElapsed = Math.max(1, now - lastFlushTime);
-        float dataRate = (float) totalBytesWritten.get() / timeElapsed; // 字节/毫秒
+        float writeRate = (float) totalBytesWritten.get() / timeElapsed;
 
-        // 根据数据速率预测所需缓冲区大小
-        int predictedSize = (int) (dataRate * 2000); // 预测2秒数据量
-
-        // 使用位运算优化扩容判断 - 检查是否超过75%阈值(近似于0.75)
-        // 使用右移2位来计算capacity的3/4，更高效
-        boolean needExpand = currentBuffer.position() > (currentBuffer.capacity() >> 2) * 3 ||
-                predictedSize > (bufferSize >> 1) + (bufferSize >> 2); // 约为0.75倍bufferSize
+        // 预测2秒内需要的缓冲区大小
+        int predictedSize = (int) (writeRate * 2000);
 
         // 检查是否需要扩容
-        if (needExpand && bufferSize < MAX_BUFFER_SIZE) {
-            // 使用位移运算计算新的缓冲区大小(下一个2的幂)
-            int newSize = bufferSize << 1; // 扩大为当前的2倍
+        if ((usageRatio > HIGH_WATER_MARK || predictedSize > bufferSize * HIGH_WATER_MARK) &&
+                bufferSize < MAX_BUFFER_SIZE) {
 
-            // 确保不超过最大限制
+            // 计算新的缓冲区大小
+            int newSize = bufferSize << 1; // 扩大为两倍
             newSize = Math.min(newSize, MAX_BUFFER_SIZE);
 
-            // 确保至少能容纳预测数据量
+            // 确保能容纳预测数据
             if (newSize < predictedSize && newSize < MAX_BUFFER_SIZE) {
-                // 找到大于predictedSize的最小2的幂
-                newSize = 1 << (32 - Integer.numberOfLeadingZeros(predictedSize - 1));
-                newSize = Math.min(newSize, MAX_BUFFER_SIZE);
+                newSize = calculateOptimalBufferSize(predictedSize);
             }
 
             if (newSize > bufferSize) {
@@ -515,17 +506,13 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                 lastResizeTime = now;
             }
         }
-        // 检查是否需要缩容 - 使用位运算优化
-        // 使用右移3位计算capacity的1/8，用于判断低使用率(约为0.125)
-        else if (usageRatio < 0.25 &&
-                bufferSize > (MIN_BUFFER_SIZE << 1) &&
-                now - lastResizeTime > 30000 &&
-                predictedSize < (bufferSize >> 2)) { // 小于buffer的1/4
+        // 检查是否需要缩容
+        else if (usageRatio < LOW_WATER_MARK &&
+                 bufferSize > (MIN_BUFFER_SIZE << 1) &&
+                 now - lastResizeTime > 30000 &&
+                 predictedSize < bufferSize * LOW_WATER_MARK) {
 
-            // 使用位移运算缩小为当前的一半
-            int newSize = bufferSize >> 1;
-
-            // 确保不小于最小缓冲区大小
+            int newSize = bufferSize >> 1; // 缩小为一半
             newSize = Math.max(newSize, MIN_BUFFER_SIZE);
 
             if (newSize < bufferSize) {
@@ -545,7 +532,8 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                 notFull.signalAll();
 
                 logger.info(String.format("关闭双缓冲队列: 总写入=%d bytes, 总刷盘=%d bytes, 调整次数=%d, 溢出次数=%d",
-                        totalBytesWritten.get(), totalFlushedBytes.get(), resizeCount.get(), overflowCount.get()));
+                        totalBytesWritten.get(), totalFlushedBytes.get(),
+                        resizeCount.get(), overflowCount.get()));
             }
         } finally {
             lock.unlock();
@@ -562,23 +550,20 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         try {
             int requiredSpace = byteBuffer.remaining();
 
-            // 特殊处理：处理大数据情况
+            // 大数据在非阻塞模式下不支持
             if (requiredSpace > MAX_BUFFER_SIZE) {
-                // 大数据处理在非阻塞模式下不支持
                 return false;
             }
 
-            if (currentBuffer.remaining() < byteBuffer.remaining()) {
+            if (currentBuffer.remaining() < requiredSpace) {
                 return false;
             }
+
+            int beforePos = currentBuffer.position();
             currentBuffer.put(byteBuffer);
+            writePosition += (currentBuffer.position() - beforePos);
 
-            // 更新写入位置
-            writePosition += byteBuffer.remaining();
-
-            // 每次写入后检查是否需要调整缓冲区大小
-            resizeBufferIfNeeded();
-
+            checkAndResizeBuffer();
             notEmpty.signal();
             return true;
         } finally {
@@ -593,38 +578,43 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         }
 
         long nanos = unit.toNanos(timeout);
+
+        // 特殊处理：处理大数据情况，超过最大缓冲区大小
+        int requiredSpace = byteBuffer.remaining();
+        if (requiredSpace > MAX_BUFFER_SIZE) {
+            handleOversizedData(byteBuffer);
+            return true;
+        }
+
         lock.lock();
         try {
-            int requiredSpace = byteBuffer.remaining();
-
-            // 特殊处理：处理大数据情况
-            if (requiredSpace > MAX_BUFFER_SIZE) {
-                try {
-                    handleOversizedData(byteBuffer);
-                    return true;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return false;
-                }
-            }
-
-            while (currentBuffer.remaining() < byteBuffer.remaining()) {
+            // 等待空间可用
+            while (currentBuffer.remaining() < requiredSpace) {
                 if (nanos <= 0) {
                     return false;
                 }
+
+                if (currentBuffer.position() > 0) {
+                    swapBuffers();
+                    notEmpty.signal();
+
+                    if (currentBuffer.remaining() >= requiredSpace) {
+                        break;
+                    }
+                }
+
                 nanos = notFull.awaitNanos(nanos);
+
                 if (closed) {
                     return false;
                 }
             }
+
+            int beforePos = currentBuffer.position();
             currentBuffer.put(byteBuffer);
+            writePosition += (currentBuffer.position() - beforePos);
 
-            // 更新写入位置
-            writePosition += byteBuffer.remaining();
-
-            // 每次写入后检查是否需要调整缓冲区大小
-            resizeBufferIfNeeded();
-
+            checkAndResizeBuffer();
             notEmpty.signal();
             return true;
         } finally {
@@ -640,16 +630,11 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                 return null;
             }
 
-            // 交换缓冲区
-            swapArea();
-
-            // 创建一个副本返回，防止外部修改影响内部状态
-            ByteBuffer result = ByteBuffer.allocate(flushingBuffer.remaining());
-            result.put(flushingBuffer.duplicate());
-            result.flip();
+            swapBuffers();
+            totalFlushedBytes.addAndGet(flushingBuffer.remaining());
 
             notFull.signal();
-            return result;
+            return flushingBuffer.duplicate();
         } finally {
             lock.unlock();
         }
@@ -671,16 +656,11 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
                 return null;
             }
 
-            // 交换缓冲区
-            swapArea();
-
-            // 创建一个副本返回，防止外部修改影响内部状态
-            ByteBuffer result = ByteBuffer.allocate(flushingBuffer.remaining());
-            result.put(flushingBuffer.duplicate());
-            result.flip();
+            swapBuffers();
+            totalFlushedBytes.addAndGet(flushingBuffer.remaining());
 
             notFull.signal();
-            return result;
+            return flushingBuffer.duplicate();
         } finally {
             lock.unlock();
         }
@@ -712,15 +692,10 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
             int n = 0;
 
             if (currentBuffer.position() > 0) {
-                // 交换缓冲区
-                swapArea();
+                swapBuffers();
+                c.add(flushingBuffer.duplicate());
+                totalFlushedBytes.addAndGet(flushingBuffer.remaining());
 
-                // 创建一个副本返回，防止外部修改影响内部状态
-                ByteBuffer result = ByteBuffer.allocate(flushingBuffer.remaining());
-                result.put(flushingBuffer.duplicate());
-                result.flip();
-
-                c.add(result);
                 notFull.signal();
                 n = 1;
             }
@@ -751,50 +726,17 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         }
     }
 
-    @Override
-    public boolean contains(Object o) {
-        return false; // 不支持此操作
-    }
+    // 以下方法实现 Collection<ByteBuffer> 接口，但不是核心功能
 
-    @Override
-    public Iterator<ByteBuffer> iterator() {
-        throw new UnsupportedOperationException(); // 不支持此操作
-    }
-
-    @Override
-    public Object[] toArray() {
-        throw new UnsupportedOperationException(); // 不支持此操作
-    }
-
-    @Override
-    public <T> T[] toArray(T[] a) {
-        throw new UnsupportedOperationException(); // 不支持此操作
-    }
-
-    @Override
-    public boolean remove(Object o) {
-        return false; // 不支持此操作
-    }
-
-    @Override
-    public boolean containsAll(Collection<?> c) {
-        return false; // 不支持此操作
-    }
-
-    @Override
-    public boolean addAll(Collection<? extends ByteBuffer> c) {
-        throw new UnsupportedOperationException(); // 不支持此操作
-    }
-
-    @Override
-    public boolean removeAll(Collection<?> c) {
-        return false; // 不支持此操作
-    }
-
-    @Override
-    public boolean retainAll(Collection<?> c) {
-        return false; // 不支持此操作
-    }
+    @Override public boolean contains(Object o) { return false; }
+    @Override public Iterator<ByteBuffer> iterator() { throw new UnsupportedOperationException(); }
+    @Override public Object[] toArray() { throw new UnsupportedOperationException(); }
+    @Override public <T> T[] toArray(T[] a) { throw new UnsupportedOperationException(); }
+    @Override public boolean remove(Object o) { return false; }
+    @Override public boolean containsAll(Collection<?> c) { return false; }
+    @Override public boolean addAll(Collection<? extends ByteBuffer> c) { throw new UnsupportedOperationException(); }
+    @Override public boolean removeAll(Collection<?> c) { return false; }
+    @Override public boolean retainAll(Collection<?> c) { return false; }
 
     @Override
     public void clear() {
@@ -809,8 +751,8 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
     }
 
     @Override
-    public boolean add(ByteBuffer byteBuffer) {
-        if (offer(byteBuffer)) {
+    public boolean add(ByteBuffer buffer) {
+        if (offer(buffer)) {
             return true;
         }
         throw new IllegalStateException("Queue full");
@@ -850,33 +792,23 @@ public class DoubleBufferBlockingQueue implements BlockingQueue<ByteBuffer> {
         }
     }
 
+    // 辅助方法
+
     public long getWritePosition() {
         return writePosition;
     }
 
-    /**
-     * 获取最后刷盘位置
-     */
     public long getFlushPosition() {
         return flushPosition;
     }
 
-    /**
-     * 获取未刷盘数据大小
-     */
     public long getUnflushedSize() {
         return writePosition - flushPosition;
     }
 
-    /**
-     * 获取已刷盘的总字节数
-     *
-     * @return 已刷盘的总字节数
-     */
     public long getTotalFlushedBytes() {
         return totalFlushedBytes.get();
     }
-
 
     public String getPerformanceStats() {
         return String.format(

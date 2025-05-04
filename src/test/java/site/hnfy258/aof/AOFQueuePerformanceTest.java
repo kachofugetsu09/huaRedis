@@ -50,10 +50,20 @@ public class AOFQueuePerformanceTest {
     private static final double LARGE_VALUE_RATIO = 0.1; // 大数据比例，10%的SET命令将使用大数据
     private static final int LARGE_VALUE_SIZE = 100 * 1024; // 大数据大小为100KB
 
-    // Add these constants
-    private static final int TEST_ITERATIONS = 3;
-    private static final List<TestResult> jdkResults = new ArrayList<>();
-    private static final List<TestResult> doubleBufferResults = new ArrayList<>();
+    // 测试次数常量
+    private static final int TEST_ITERATIONS = 3;  // 设为3次测试取平均值
+    
+    // 各测试场景结果列表
+    private static final List<TestResult> standardJdkResults = new ArrayList<>();
+    private static final List<TestResult> standardDoubleBufferResults = new ArrayList<>();
+    private static final List<TestResult> largeDataJdkResults = new ArrayList<>();
+    private static final List<TestResult> largeDataDoubleBufferResults = new ArrayList<>();
+    private static final List<TestResult> highConcurrencyJdkResults = new ArrayList<>();
+    private static final List<TestResult> highConcurrencyDoubleBufferResults = new ArrayList<>();
+    private static final List<TestResult> highFlushRateJdkResults = new ArrayList<>();
+    private static final List<TestResult> highFlushRateDoubleBufferResults = new ArrayList<>();
+    private static final List<TestResult> extremeJdkResults = new ArrayList<>();
+    private static final List<TestResult> extremeDoubleBufferResults = new ArrayList<>();
 
     // 新增的极限测试参数
     private static final int HIGH_CONCURRENCY_THREAD_COUNT = 16; // 高并发线程数
@@ -925,27 +935,48 @@ public class AOFQueuePerformanceTest {
     private static void runHighConcurrencyTest() throws Exception {
         logger.info("=================== 高并发场景测试 ===================");
         logger.info("线程数: " + HIGH_CONCURRENCY_THREAD_COUNT);
+        logger.info("每个测试将运行 " + TEST_ITERATIONS + " 次并取平均值");
 
-        // JDK队列测试
-        TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                HIGH_CONCURRENCY_THREAD_COUNT,
-                1000, false, 1024);
+        // 清空之前的结果
+        highConcurrencyJdkResults.clear();
+        highConcurrencyDoubleBufferResults.clear();
 
-        // 双缓冲队列测试
-        TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                HIGH_CONCURRENCY_THREAD_COUNT,
-                1000, false, 1024);
+        for (int i = 0; i < TEST_ITERATIONS; i++) {
+            logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮高并发测试");
+            
+            // JDK队列测试
+            TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
+                    HIGH_CONCURRENCY_THREAD_COUNT,
+                    1000, false, 1024);
+            highConcurrencyJdkResults.add(jdkResult);
+
+            // 短暂休息
+            Thread.sleep(2000);
+
+            // 双缓冲队列测试
+            TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
+                    HIGH_CONCURRENCY_THREAD_COUNT,
+                    1000, false, 1024);
+            highConcurrencyDoubleBufferResults.add(doubleBufferResult);
+
+            // 短暂休息，让系统恢复
+            Thread.sleep(2000);
+        }
+
+        // 计算平均结果
+        TestResult avgJdkResult = calculateAverageResult(highConcurrencyJdkResults);
+        TestResult avgDoubleBufferResult = calculateAverageResult(highConcurrencyDoubleBufferResults);
 
         // 比较结果
-        double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
-        double latencyRatio = safeDivide(jdkResult.latency, doubleBufferResult.latency);
-        double bytesRatio = safeDivide(doubleBufferResult.bytesPerSecond, jdkResult.bytesPerSecond);
+        double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
+        double latencyRatio = safeDivide(avgJdkResult.latency, avgDoubleBufferResult.latency);
+        double bytesRatio = safeDivide(avgDoubleBufferResult.bytesPerSecond, avgJdkResult.bytesPerSecond);
 
-        logger.info("========== 高并发场景比较结果 ==========");
+        logger.info("========== 高并发场景比较结果 (平均 " + TEST_ITERATIONS + " 次) ==========");
         logger.info(String.format("JDK队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                jdkResult.throughput, jdkResult.latency, jdkResult.bytesPerSecond / (1024 * 1024)));
+                avgJdkResult.throughput, avgJdkResult.latency, avgJdkResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("双缓冲队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                doubleBufferResult.throughput, doubleBufferResult.latency, doubleBufferResult.bytesPerSecond / (1024 * 1024)));
+                avgDoubleBufferResult.throughput, avgDoubleBufferResult.latency, avgDoubleBufferResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("性能比较: 双缓冲队列吞吐量是JDK队列的 %.2f 倍", throughputRatio));
         logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 (值越小越好)", latencyRatio > 0 ? 1/latencyRatio : 0));
         logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
@@ -957,27 +988,48 @@ public class AOFQueuePerformanceTest {
     private static void runLargeDataTest() throws Exception {
         logger.info("=================== 大数据量测试 ===================");
         logger.info("数据大小: " + LARGE_DATA_SIZE + " 字节");
+        logger.info("每个测试将运行 " + TEST_ITERATIONS + " 次并取平均值");
 
-        // JDK队列测试
-        TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                THREAD_COUNT,
-                1000, true, LARGE_DATA_SIZE);
+        // 清空之前的结果
+        largeDataJdkResults.clear();
+        largeDataDoubleBufferResults.clear();
 
-        // 双缓冲队列测试
-        TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                THREAD_COUNT,
-                1000, true, LARGE_DATA_SIZE);
+        for (int i = 0; i < TEST_ITERATIONS; i++) {
+            logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮大数据量测试");
+            
+            // JDK队列测试
+            TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
+                    THREAD_COUNT,
+                    1000, true, LARGE_DATA_SIZE);
+            largeDataJdkResults.add(jdkResult);
+
+            // 短暂休息
+            Thread.sleep(2000);
+
+            // 双缓冲队列测试
+            TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
+                    THREAD_COUNT,
+                    1000, true, LARGE_DATA_SIZE);
+            largeDataDoubleBufferResults.add(doubleBufferResult);
+
+            // 短暂休息，让系统恢复
+            Thread.sleep(2000);
+        }
+
+        // 计算平均结果
+        TestResult avgJdkResult = calculateAverageResult(largeDataJdkResults);
+        TestResult avgDoubleBufferResult = calculateAverageResult(largeDataDoubleBufferResults);
 
         // 比较结果
-        double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
-        double latencyRatio = safeDivide(jdkResult.latency, doubleBufferResult.latency);
-        double bytesRatio = safeDivide(doubleBufferResult.bytesPerSecond, jdkResult.bytesPerSecond);
+        double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
+        double latencyRatio = safeDivide(avgJdkResult.latency, avgDoubleBufferResult.latency);
+        double bytesRatio = safeDivide(avgDoubleBufferResult.bytesPerSecond, avgJdkResult.bytesPerSecond);
 
-        logger.info("========== 大数据量比较结果 ==========");
+        logger.info("========== 大数据量比较结果 (平均 " + TEST_ITERATIONS + " 次) ==========");
         logger.info(String.format("JDK队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                jdkResult.throughput, jdkResult.latency, jdkResult.bytesPerSecond / (1024 * 1024)));
+                avgJdkResult.throughput, avgJdkResult.latency, avgJdkResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("双缓冲队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                doubleBufferResult.throughput, doubleBufferResult.latency, doubleBufferResult.bytesPerSecond / (1024 * 1024)));
+                avgDoubleBufferResult.throughput, avgDoubleBufferResult.latency, avgDoubleBufferResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("性能比较: 双缓冲队列吞吐量是JDK队列的 %.2f 倍", throughputRatio));
         logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 (值越小越好)", latencyRatio > 0 ? 1/latencyRatio : 0));
         logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
@@ -989,27 +1041,48 @@ public class AOFQueuePerformanceTest {
     private static void runHighFlushRateTest() throws Exception {
         logger.info("=================== 高频刷盘测试 ===================");
         logger.info("刷盘间隔: " + HIGH_FLUSH_RATE_MS + " 毫秒");
+        logger.info("每个测试将运行 " + TEST_ITERATIONS + " 次并取平均值");
 
-        // JDK队列测试
-        TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                THREAD_COUNT,
-                HIGH_FLUSH_RATE_MS, false, 0);
+        // 清空之前的结果
+        highFlushRateJdkResults.clear();
+        highFlushRateDoubleBufferResults.clear();
 
-        // 双缓冲队列测试
-        TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                THREAD_COUNT,
-                HIGH_FLUSH_RATE_MS, false, 0);
+        for (int i = 0; i < TEST_ITERATIONS; i++) {
+            logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮高频刷盘测试");
+            
+            // JDK队列测试
+            TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
+                    THREAD_COUNT,
+                    HIGH_FLUSH_RATE_MS, false, 0);
+            highFlushRateJdkResults.add(jdkResult);
+
+            // 短暂休息
+            Thread.sleep(2000);
+
+            // 双缓冲队列测试
+            TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
+                    THREAD_COUNT,
+                    HIGH_FLUSH_RATE_MS, false, 0);
+            highFlushRateDoubleBufferResults.add(doubleBufferResult);
+
+            // 短暂休息，让系统恢复
+            Thread.sleep(2000);
+        }
+
+        // 计算平均结果
+        TestResult avgJdkResult = calculateAverageResult(highFlushRateJdkResults);
+        TestResult avgDoubleBufferResult = calculateAverageResult(highFlushRateDoubleBufferResults);
 
         // 比较结果
-        double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
-        double latencyRatio = safeDivide(jdkResult.latency, doubleBufferResult.latency);
-        double bytesRatio = safeDivide(doubleBufferResult.bytesPerSecond, jdkResult.bytesPerSecond);
+        double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
+        double latencyRatio = safeDivide(avgJdkResult.latency, avgDoubleBufferResult.latency);
+        double bytesRatio = safeDivide(avgDoubleBufferResult.bytesPerSecond, avgJdkResult.bytesPerSecond);
 
-        logger.info("========== 高频刷盘比较结果 ==========");
+        logger.info("========== 高频刷盘比较结果 (平均 " + TEST_ITERATIONS + " 次) ==========");
         logger.info(String.format("JDK队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                jdkResult.throughput, jdkResult.latency, jdkResult.bytesPerSecond / (1024 * 1024)));
+                avgJdkResult.throughput, avgJdkResult.latency, avgJdkResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("双缓冲队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                doubleBufferResult.throughput, doubleBufferResult.latency, doubleBufferResult.bytesPerSecond / (1024 * 1024)));
+                avgDoubleBufferResult.throughput, avgDoubleBufferResult.latency, avgDoubleBufferResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("性能比较: 双缓冲队列吞吐量是JDK队列的 %.2f 倍", throughputRatio));
         logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 (值越小越好)", latencyRatio > 0 ? 1/latencyRatio : 0));
         logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
@@ -1022,27 +1095,48 @@ public class AOFQueuePerformanceTest {
         logger.info("=================== 综合极端场景测试 ===================");
         logger.info(String.format("线程数: %d, 刷盘间隔: %dms, 数据大小: %d字节",
                 HIGH_CONCURRENCY_THREAD_COUNT, HIGH_FLUSH_RATE_MS, LARGE_DATA_SIZE));
+        logger.info("每个测试将运行 " + TEST_ITERATIONS + " 次并取平均值");
 
-        // JDK队列测试
-        TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                HIGH_CONCURRENCY_THREAD_COUNT,
-                HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
+        // 清空之前的结果
+        extremeJdkResults.clear();
+        extremeDoubleBufferResults.clear();
 
-        // 双缓冲队列测试
-        TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                HIGH_CONCURRENCY_THREAD_COUNT,
-                HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
+        for (int i = 0; i < TEST_ITERATIONS; i++) {
+            logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮极端场景测试");
+            
+            // JDK队列测试
+            TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
+                    HIGH_CONCURRENCY_THREAD_COUNT,
+                    HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
+            extremeJdkResults.add(jdkResult);
+
+            // 短暂休息
+            Thread.sleep(2000);
+
+            // 双缓冲队列测试
+            TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
+                    HIGH_CONCURRENCY_THREAD_COUNT,
+                    HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
+            extremeDoubleBufferResults.add(doubleBufferResult);
+
+            // 短暂休息，让系统恢复
+            Thread.sleep(2000);
+        }
+
+        // 计算平均结果
+        TestResult avgJdkResult = calculateAverageResult(extremeJdkResults);
+        TestResult avgDoubleBufferResult = calculateAverageResult(extremeDoubleBufferResults);
 
         // 比较结果
-        double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
-        double latencyRatio = safeDivide(jdkResult.latency, doubleBufferResult.latency);
-        double bytesRatio = safeDivide(doubleBufferResult.bytesPerSecond, jdkResult.bytesPerSecond);
+        double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
+        double latencyRatio = safeDivide(avgJdkResult.latency, avgDoubleBufferResult.latency);
+        double bytesRatio = safeDivide(avgDoubleBufferResult.bytesPerSecond, avgJdkResult.bytesPerSecond);
 
-        logger.info("========== 综合极端场景比较结果 ==========");
+        logger.info("========== 综合极端场景比较结果 (平均 " + TEST_ITERATIONS + " 次) ==========");
         logger.info(String.format("JDK队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                jdkResult.throughput, jdkResult.latency, jdkResult.bytesPerSecond / (1024 * 1024)));
+                avgJdkResult.throughput, avgJdkResult.latency, avgJdkResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("双缓冲队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                doubleBufferResult.throughput, doubleBufferResult.latency, doubleBufferResult.bytesPerSecond / (1024 * 1024)));
+                avgDoubleBufferResult.throughput, avgDoubleBufferResult.latency, avgDoubleBufferResult.bytesPerSecond / (1024 * 1024)));
         logger.info(String.format("性能比较: 双缓冲队列吞吐量是JDK队列的 %.2f 倍", throughputRatio));
         logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 ", latencyRatio > 0 ? 1/latencyRatio : 0));
         logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
@@ -1119,12 +1213,12 @@ public class AOFQueuePerformanceTest {
      */
     public static void main(String[] args) {
         try {
-//            logger.info("开始AOF队列性能比较测试");
-//            logger.info("配置: 线程数=" + THREAD_COUNT +
-//                    ", 缓冲区大小=" + BUFFER_SIZE +
-//                    ", 批处理大小=" + BATCH_SIZE +
-//                    ", 测试时长=" + TEST_DURATION_SECONDS + "秒" +
-//                    ", 测试迭代次数=" + TEST_ITERATIONS);
+            logger.info("开始AOF队列性能比较测试");
+            logger.info("配置: 线程数=" + THREAD_COUNT +
+                    ", 缓冲区大小=" + BUFFER_SIZE +
+                    ", 批处理大小=" + BATCH_SIZE +
+                    ", 测试时长=" + TEST_DURATION_SECONDS + "秒" +
+                    ", 测试迭代次数=" + TEST_ITERATIONS);
 
             // 清理测试文件
             cleanupFiles();
@@ -1133,28 +1227,31 @@ public class AOFQueuePerformanceTest {
             logger.info("开始预热阶段...");
             Thread.sleep(WARM_UP_SECONDS * 1000);
 
-
-
             // 运行标准测试
-//             logger.info("=================== 标准场景测试 ===================");
+            logger.info("=================== 标准场景测试 ===================");
+            logger.info("每个测试将运行 " + TEST_ITERATIONS + " 次并取平均值");
+            
             for (int i = 0; i < TEST_ITERATIONS; i++) {
-//                 logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮测试");
+                logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮标准场景测试");
 
                 // 运行JDK队列测试
                 TestResult jdkResult = runJdkQueueTest();
-                jdkResults.add(jdkResult);
+                standardJdkResults.add(jdkResult);
+
+                // 短暂休息
+                Thread.sleep(2000);
 
                 // 运行双缓冲队列测试
                 TestResult doubleBufferResult = runDoubleBufferQueueTest();
-                doubleBufferResults.add(doubleBufferResult);
+                standardDoubleBufferResults.add(doubleBufferResult);
 
                 // 短暂休息，让系统恢复
                 Thread.sleep(2000);
             }
 
             // 计算平均结果
-            TestResult avgJdkResult = calculateAverageResult(jdkResults);
-            TestResult avgDoubleBufferResult = calculateAverageResult(doubleBufferResults);
+            TestResult avgJdkResult = calculateAverageResult(standardJdkResults);
+            TestResult avgDoubleBufferResult = calculateAverageResult(standardDoubleBufferResults);
 
             // 比较结果
             double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
@@ -1170,13 +1267,17 @@ public class AOFQueuePerformanceTest {
             logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 (值越小越好)", latencyRatio > 0 ? 1/latencyRatio : 0));
             logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
 
-
-            // 运行极端场景测试
-            runLargeDataTest();
-            runHighConcurrencyTest();
-
-            runHighFlushRateTest();
-            runExtremeTest();
+            // 运行各种极端场景测试
+            runLargeDataTest();    // 大数据测试
+            Thread.sleep(5000);    // 不同场景之间稍微休息长一点
+            
+            runHighConcurrencyTest();  // 高并发测试
+            Thread.sleep(5000);
+            
+            runHighFlushRateTest();    // 高频刷盘测试
+            Thread.sleep(5000);
+            
+            runExtremeTest();    // 极端综合场景测试
 
             // 清理测试文件
             cleanupFiles();

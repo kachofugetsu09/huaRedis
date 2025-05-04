@@ -1,108 +1,122 @@
-# Java 实现的简易 Redis 数据库
+# HuaRedis - 高性能Java实现的Redis服务器
 
 ## 项目概述
-这是一个基于 Java 和 Netty 实现的轻量级 Redis 服务器，提供了 Redis 核心数据结构和命令的实现，并支持 AOF，RDB的独立持久化（暂不支持混合模式）。性能可达原版 Redis 的约 80%-90%。
+HuaRedis是一个基于Java和Netty实现的高性能Redis服务器，提供了Redis核心数据结构和命令的实现，并支持AOF和RDB持久化。项目特点是高性能、高并发，性能可达原版Redis的80%-90%。
 
-## 已实现功能
+## 核心特性
 
-### 核心功能
-- [x] **Redis 协议实现** - 完整支持 RESP (Redis Serialization Protocol)
-- [x] **基于 Netty 的高性能网络服务** - 利用 Netty 的事件驱动模型提供高并发支持
-- [x] **数据结构层实现** - 高效内存数据结构的 Java 实现
+### 1. 数据结构支持
+- **字符串(String)** - 完整支持SET、GET、INCR等操作
+- **列表(List)** - 支持LPUSH、RPUSH、LPOP、RPOP、LRANGE等操作
+- **哈希表(Hash)** - 支持HSET、HGET、HMGET、HGETALL等操作
+- **集合(Set)** - 支持SADD、SMEMBERS、SISMEMBER、SCARD、SPOP等操作
+- **有序集合(SortedSet)** - 支持ZADD、ZRANGE、ZREVRANGE、ZRANGEBYSCORE等操作
 
-### 持久化功能
-# 持久化功能
+### 2. 网络与协议
+- **RESP协议支持** - 完整实现Redis序列化协议
+- **基于Netty的高性能网络框架** - 利用事件驱动模型提供高并发支持
+- **连接池优化** - 高效管理连接资源
 
-## RDB 持久化
-- **全量快照**
-  - 支持后台非阻塞式保存(bgsave)
-  - 采用二进制紧凑格式存储
-  - 自动触发条件：
-    - 900秒内至少1次修改
-    - 300秒内至少10次修改
-    - 60秒内至少10000次修改
-    - 每小时强制全量备份
+### 3. 持久化机制
 
-- **增量快照**
-  - 仅记录被修改的键值对
-  - 当修改量>100时自动触发
-  - 采用写时复制技术优化内存使用
+#### RDB持久化
+- **全量快照** - 支持SAVE和BGSAVE命令
+- **增量快照** - 仅记录被修改的键值对，提高性能
+- **自动触发备份** - 根据配置自动执行持久化
+- **文件原子替换** - 确保数据安全
 
-- **高级特性**
-  - 多数据库支持
-  - 原子文件替换保证数据安全
-  - 启动时自动加载RDB文件
+#### AOF持久化
+- **三种同步策略** - 支持ALWAYS、EVERYSEC和NO三种刷盘策略
+- **零拷贝双缓冲** - 使用DoubleBufferBlockingQueue提高性能
+- **RESP格式记录** - 使用标准协议格式记录操作命令
+- **动态缓冲区调整** - 根据负载自动调整缓冲区大小
 
-## AOF 持久化
-- **同步策略**
-  - `ALWAYS`: 每次写入都同步到磁盘
-  - `EVERYSEC`: 每秒同步一次（默认）
-  - `NO`: 由操作系统决定同步时机
+### 4. 集群架构
+- **主从复制** - 实现基础的主从复制机制
+- **分片集群** - 支持基于固定哈希槽位的数据分片
 
-- **核心优化**
-  - 双缓冲异步写入
-  - 命令日志采用RESP协议格式
-  - 启动时自动从AOF文件恢复数据
-
-### 数据结构与命令
-
-#### 字符串 (String)
-- [x] `SET key value [EX seconds] [PX milliseconds] [NX|XX]` - 设置键值对
-- [x] `GET key` - 获取指定键的值
-- [x] `DEL key` - 删除指定键值对
-- [x] `EXISTS key` - 检查键是否存在
-- [x] `EXPIRE key seconds` - 设置键的过期时间
-- [x] `TTL key` - 获取键的剩余过期时间
-- [x] `INCR key` - 将键的整数值加一
-- [x] `MSET key value [key value ...]` - 设置多个键值对
-
-#### 集合 (Set)
-- [x] `SADD key member [member ...]` - 添加一个或多个成员到集合
-- [x] `SMEMBERS key` - 获取集合中的所有成员
-- [x] `SISMEMBER key member` - 判断成员是否在集合中
-- [x] `SCARD key` - 获取集合中的成员数量
-- [x] `SREM key member [member ...]` - 移除集合中的一个或多个成员
-- [x] `SPOP key [count]` - 随机移除并返回集合中的一个或多个成员
-
-#### 哈希表 (Hash)
-- [x] `HSET key field value [field value ...]` - 设置哈希表中的字段值
-- [x] `HGET key field` - 获取哈希表中指定字段的值
-- [x] `HMSET key field value [field value ...]` - 同时设置多个字段值
-- [x] `HMGET key field [field ...]` - 同时获取多个字段的值
-- [x] `HGETALL key` - 获取哈希表中所有的字段和值
-- [x] `HDEL key field [field ...]` - 删除哈希表中的一个或多个字段
-- [x] `HEXISTS key field` - 判断哈希表中是否存在指定字段
-- [x] `HLEN key` - 获取哈希表中字段的数量
-
-#### 列表 (List)
-- [x] `LPUSH key element [element ...]` - 将一个或多个元素添加到列表头部
-- [x] `RPUSH key element [element ...]` - 将一个或多个元素添加到列表尾部
-- [x] `LPOP key` - 移除并返回列表的第一个元素
-- [x] `RPOP key` - 移除并返回列表的最后一个元素
-- [x] `LLEN key` - 获取列表的长度
-- [x] `LRANGE key start stop` - 获取列表指定范围内的元素
-- [x] `LREM key count value` - 移除列表中与值匹配的元素
-
-#### 有序集合 (Sorted Set)
-- [x] `ZADD key score member [score member ...]` - 添加一个或多个成员到有序集合
-- [x] `ZRANGE key start stop [WITHSCORES]` - 按索引范围获取有序集合的成员
-- [x] `ZREVRANGE key start stop [WITHSCORES]` - 按索引范围倒序获取有序集合的成员
-- [x] `ZRANGEBYSCORE key min max [WITHSCORES]` - 按分数范围获取有序集合的成员
-- [x] `ZREM key member [member ...]` - 移除有序集合中的一个或多个成员
-- [x] `ZCARD key` - 获取有序集合的成员数量
-- [x] `ZSCORE key member` - 获取有序集合成员的分数
 
 ## 性能优化
-- 初期尝试使用数组+CRC16作为哈希槽，但经测试性能不及 ConcurrentHashMap
-- 采用双缓冲技术提高 AOF 持久化性能
-- 通过批处理和异步写入减少 I/O 操作对性能的影响
-- 针对高并发场景优化了日志输出频率
+
+### 双缓冲队列 (DoubleBufferBlockingQueue)
+专为AOF持久化设计的高性能队列，提供了相比JDK队列更高的性能：
+
+- **零拷贝技术** - 通过缓冲区交换避免内存拷贝
+- **动态调整策略** - 根据负载自动扩缩容
+- **小数据批处理** - 减少锁竞争提高吞吐量
+- **大数据优化** - 对大命令进行分片处理，解决内存问题
+
+### 性能测试结果
+与JDK原生队列相比：
+
+1. **标准场景**：吞吐量提升14%，延迟降低13%
+2. **大数据场景**：吞吐量提升10%，延迟降低10%
+3. **高并发场景**：吞吐量提升5%，延迟降低5%
+4. **高频刷盘场景**：轻微性能优势
+
+### 其他优化
+- 使用ConcurrentHashMap替代CRC16分片优化查询性能
+- 批处理I/O操作减少系统调用
+- 高并发下的日志输出频率优化
+
+## 命令支持
+
+### 字符串操作
+- `SET key value [EX seconds] [PX milliseconds] [NX|XX]` - 设置键值对
+- `GET key` - 获取值
+- `DEL key` - 删除键值对
+- `EXISTS key` - 检查键是否存在
+- `EXPIRE key seconds` - 设置过期时间
+- `TTL key` - 获取剩余过期时间
+- `INCR key` - 将整数值加一
+- `MSET key value [key value ...]` - 批量设置
+
+### 集合操作
+- `SADD key member [member ...]` - 添加成员
+- `SMEMBERS key` - 获取所有成员
+- `SISMEMBER key member` - 判断成员是否存在
+- `SCARD key` - 获取成员数量
+- `SREM key member [member ...]` - 移除成员
+- `SPOP key [count]` - 随机弹出成员
+
+### 哈希表操作
+- `HSET key field value [field value ...]` - 设置字段值
+- `HGET key field` - 获取字段值
+- `HMSET key field value [field value ...]` - 批量设置字段
+- `HMGET key field [field ...]` - 批量获取字段
+- `HGETALL key` - 获取所有字段和值
+- `HDEL key field [field ...]` - 删除字段
+- `HEXISTS key field` - 判断字段是否存在
+- `HLEN key` - 获取字段数量
+
+### 列表操作
+- `LPUSH key element [element ...]` - 左侧插入元素
+- `RPUSH key element [element ...]` - 右侧插入元素
+- `LPOP key` - 左侧弹出元素
+- `RPOP key` - 右侧弹出元素
+- `LLEN key` - 获取列表长度
+- `LRANGE key start stop` - 获取指定范围元素
+- `LREM key count value` - 移除匹配元素
+
+### 有序集合操作
+- `ZADD key score member [score member ...]` - 添加成员
+- `ZRANGE key start stop [WITHSCORES]` - 按索引范围获取成员
+- `ZREVRANGE key start stop [WITHSCORES]` - 倒序获取成员
+- `ZRANGEBYSCORE key min max [WITHSCORES]` - 按分数范围获取成员
+- `ZREM key member [member ...]` - 移除成员
+- `ZCARD key` - 获取成员数量
+- `ZSCORE key member` - 获取成员分数
+
+## 项目状态
+- [x] Redis核心数据结构实现
+- [x] RESP协议支持
+- [x] AOF持久化（优化版）
+- [x] RDB持久化（增量与全量）
+- [x] 分片集群支持
+- [x] 主从复制（基础功能）
+- [ ] 哨兵模式 高可用实现
+
 ![HuaRedis.png](HuaRedis.png)
 
-## 未来计划
-- [ ] 主从复制功能
 
-- [x] 分片集群支持
--   目前仅仅支持简单的getset指令 但不支持持久化
-- [ ] 事务支持
 
