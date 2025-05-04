@@ -51,7 +51,7 @@ public class AOFQueuePerformanceTest {
     private static final int LARGE_VALUE_SIZE = 100 * 1024; // 大数据大小为100KB
 
     // Add these constants
-    private static final int TEST_ITERATIONS = 1;
+    private static final int TEST_ITERATIONS = 3;
     private static final List<TestResult> jdkResults = new ArrayList<>();
     private static final List<TestResult> doubleBufferResults = new ArrayList<>();
 
@@ -70,7 +70,7 @@ public class AOFQueuePerformanceTest {
         private final int batchSize;
         private ByteBuf batchBuffer;
         private final ReentrantLock batchLock = new ReentrantLock();
-        
+
         // 添加统计字节的计数器，与双缓冲队列保持一致
         private final AtomicLong appendedBytes = new AtomicLong(0);
 
@@ -98,11 +98,11 @@ public class AOFQueuePerformanceTest {
                         ByteBuf buf = Unpooled.directBuffer(estimatedSize);
                         command.write(command, buf);
                         int actualSize = buf.readableBytes();
-                        
+
                         // 更新统计信息
                         appendedBytes.addAndGet(actualSize);
                         logger.debug("添加大命令: 大小=" + actualSize + " 字节, 累计=" + appendedBytes.get() + " 字节");
-                        
+
                         ByteBuffer byteBuffer = buf.nioBuffer();
                         queue.put(byteBuffer);
                         buf.release();
@@ -116,14 +116,14 @@ public class AOFQueuePerformanceTest {
 
                     // 记录写入前的可读字节数
                     int beforeSize = batchBuffer.readableBytes();
-                    
+
                     // 将命令写入批处理缓冲区
                     command.write(command, batchBuffer);
-                    
+
                     // 记录写入后的可读字节数，计算实际写入量
                     int afterSize = batchBuffer.readableBytes();
                     int writtenSize = afterSize - beforeSize;
-                    
+
                     // 更新统计信息
                     appendedBytes.addAndGet(writtenSize);
 
@@ -180,19 +180,19 @@ public class AOFQueuePerformanceTest {
 //
                             // 保存刷盘前的字节计数，用于验证写入效果
                             long beforeBytes = totalBytesWritten.get();
-                            
+
                             // 执行写入
                             writer.write(buffer);
-                            
+
                             // 验证写入后的字节计数
                             long afterBytes = totalBytesWritten.get();
                             long deltaBytes = afterBytes - beforeBytes;
-                            
+
                             // 记录日志，确认写入是否成功
 //                            logger.info(String.format(
 //                                "JDK队列刷盘完成: 预期写入 %d 字节, 实际增加 %d 字节, 总计 %d 字节",
 //                                buffer.remaining(), deltaBytes, afterBytes));
-                            
+
                             if (deltaBytes <= 0) {
                                 logger.warn("JDK队列刷盘未增加字节计数，可能写入失败");
                             }
@@ -234,7 +234,7 @@ public class AOFQueuePerformanceTest {
         public boolean isRunning() {
             return running.get();
         }
-        
+
         // 获取通过append方法统计的字节数，与双缓冲队列保持一致
         public long getAppendedBytes() {
             return appendedBytes.get();
@@ -251,7 +251,7 @@ public class AOFQueuePerformanceTest {
         private final int batchSize;
         private ByteBuf batchBuffer;
         private final ReentrantLock batchLock = new ReentrantLock();
-        
+
         // 添加统计字节的计数器
         private final AtomicLong appendedBytes = new AtomicLong(0);
 
@@ -279,11 +279,11 @@ public class AOFQueuePerformanceTest {
                         ByteBuf buf = Unpooled.directBuffer(estimatedSize);
                         command.write(command, buf);
                         int actualSize = buf.readableBytes();
-                        
+
                         // 更新统计信息
                         appendedBytes.addAndGet(actualSize);
                         logger.info("添加大命令: 大小=" + actualSize + " 字节, 累计=" + appendedBytes.get() + " 字节");
-                        
+
                         ByteBuffer byteBuffer = buf.nioBuffer();
                         bufferQueue.put(byteBuffer);
                         buf.release();
@@ -297,14 +297,14 @@ public class AOFQueuePerformanceTest {
 
                     // 记录写入前的可读字节数
                     int beforeSize = batchBuffer.readableBytes();
-                    
+
                     // 将命令写入批处理缓冲区
                     command.write(command, batchBuffer);
-                    
+
                     // 记录写入后的可读字节数，计算实际写入量
                     int afterSize = batchBuffer.readableBytes();
                     int writtenSize = afterSize - beforeSize;
-                    
+
                     // 更新统计信息
                     appendedBytes.addAndGet(writtenSize);
 //                    logger.info("添加命令到批处理缓冲区: 大小=" + writtenSize + " 字节, 累计=" + appendedBytes.get() + " 字节");
@@ -363,21 +363,21 @@ public class AOFQueuePerformanceTest {
                             // 保存刷盘前的字节计数，用于验证写入效果
                             long beforeBytes = totalBytesWritten.get();
                             long queueFlushedBefore = bufferQueue.getTotalFlushedBytes();
-                            
+
                             // 执行写入
                             writer.write(buffer);
-                            
+
                             // 验证写入后的字节计数
                             long afterBytes = totalBytesWritten.get();
                             long deltaBytes = afterBytes - beforeBytes;
                             long queueFlushedAfter = bufferQueue.getTotalFlushedBytes();
                             long queueDeltaBytes = queueFlushedAfter - queueFlushedBefore;
-                            
+
                             // 记录日志，确认写入是否成功
 //                            logger.info(String.format(
 //                                "双缓冲队列刷盘完成: 预期写入 %d 字节, 实际增加 %d 字节, 队列记录增加 %d 字节, 总计 %d 字节, 队列总计 %d 字节",
 //                                buffer.remaining(), deltaBytes, queueDeltaBytes, afterBytes, queueFlushedAfter));
-                            
+
                             if (deltaBytes <= 0) {
                                 logger.warn("双缓冲队列刷盘未增加字节计数，可能写入失败");
                             }
@@ -450,29 +450,29 @@ public class AOFQueuePerformanceTest {
             if (buffer != null && buffer.hasRemaining()) {
                 // 先保存原始的remaining值作为写入字节数
                 int bytesToWrite = buffer.remaining();
-                
+
                 // 创建一个新的缓冲区副本，防止原缓冲区被释放或状态改变
                 ByteBuffer copyBuffer = ByteBuffer.allocateDirect(bytesToWrite);
                 // 使用duplicate避免影响原buffer的position
                 copyBuffer.put(buffer.duplicate());
                 copyBuffer.flip();
-                
+
                 try {
                     // 写入文件并更新字节计数
                     int written = channel.write(copyBuffer);
                     bytesWritten.addAndGet(written);
                     totalBytesWritten.addAndGet(written);
-                    
+
                     // 添加详细日志，记录写入情况
                     logger.debug(String.format(
-                        "写入文件 %s: 期望写入 %d 字节, 实际写入 %d 字节, 文件总写入量 %d 字节, 全局总写入量 %d 字节",
-                        filename, bytesToWrite, written, bytesWritten.get(), totalBytesWritten.get()));
-                    
+                            "写入文件 %s: 期望写入 %d 字节, 实际写入 %d 字节, 文件总写入量 %d 字节, 全局总写入量 %d 字节",
+                            filename, bytesToWrite, written, bytesWritten.get(), totalBytesWritten.get()));
+
                     // 记录日志以进行调试
                     if (written != bytesToWrite) {
                         logger.warn(String.format(
-                            "写入字节数不匹配: 期望 %d, 实际 %d, 文件: %s", 
-                            bytesToWrite, written, filename));
+                                "写入字节数不匹配: 期望 %d, 实际 %d, 文件: %s",
+                                bytesToWrite, written, filename));
                     }
                 } catch (Exception e) {
                     logger.error("写入文件时发生错误: " + e.getMessage(), e);
@@ -621,7 +621,7 @@ public class AOFQueuePerformanceTest {
             } else {
                 value = sb.toString();
             }
-            
+
             // 记录生成的大值大小
             logger.debug("生成大型值，大小: " + value.length() + " 字节");
         } else {
@@ -668,8 +668,8 @@ public class AOFQueuePerformanceTest {
      * @param dataSize 大数据大小(字节)
      */
     private static TestResult runJdkQueueTest(int testDurationSeconds, int threadCount,
-                                            int flushIntervalMs, boolean useLargeData,
-                                            int dataSize) throws Exception {
+                                              int flushIntervalMs, boolean useLargeData,
+                                              int dataSize) throws Exception {
         logger.info("开始JDK原生阻塞队列测试...");
         logger.info(String.format("参数: 线程数=%d, 刷盘间隔=%dms, 大数据=%b, 数据大小=%d字节",
                 threadCount, flushIntervalMs, useLargeData, dataSize));
@@ -742,13 +742,13 @@ public class AOFQueuePerformanceTest {
             int totalCommands = completedCommands.get();
             double throughput = (double) totalCommands / testDurationSeconds;
             double avgLatency = totalCommands > 0 ? (double) totalLatency.get() / totalCommands / 1000000.0 : 0;
-            
+
             // 使用append统计的字节数，与双缓冲队列保持一致
             long appendedBytes = finalProcessor.getAppendedBytes();
 //            logger.info("JDK队列累计字节统计:");
 //            logger.info("- 累计添加字节数: " + appendedBytes + " 字节");
 //            logger.info("- writer记录字节数: " + writer.getBytesWritten() + " 字节");
-            
+
             // 使用appendedBytes作为实际数据量，与双缓冲队列保持一致
             double bytesPerSecond = (double) appendedBytes / testDurationSeconds;
 
@@ -795,8 +795,8 @@ public class AOFQueuePerformanceTest {
      * @param dataSize 大数据大小(字节)
      */
     private static TestResult runDoubleBufferQueueTest(int testDurationSeconds, int threadCount,
-                                                    int flushIntervalMs, boolean useLargeData,
-                                                    int dataSize) throws Exception {
+                                                       int flushIntervalMs, boolean useLargeData,
+                                                       int dataSize) throws Exception {
         logger.info("开始双缓冲队列测试...");
         logger.info(String.format("参数: 线程数=%d, 刷盘间隔=%dms, 大数据=%b, 数据大小=%d字节",
                 threadCount, flushIntervalMs, useLargeData, dataSize));
@@ -864,16 +864,16 @@ public class AOFQueuePerformanceTest {
             // 等待测试时间
             Thread.sleep(testDurationSeconds * 1000L);
             stopTest = true;
-            
+
 //            // 测试结束后强制执行一次刷盘，确保所有数据都被写入
 //            logger.info("测试结束，强制执行最后一次刷盘");
             finalProcessor.flush();
-            
+
             // 计算结果
             int totalCommands = completedCommands.get();
             double throughput = (double) totalCommands / testDurationSeconds;
             double avgLatency = totalCommands > 0 ? (double) totalLatency.get() / totalCommands / 1000000.0 : 0;
-            
+
             // 使用双缓冲队列中的字节统计
             long flushedBytes = finalProcessor.bufferQueue.getTotalFlushedBytes();
             long appendedBytes = finalProcessor.getAppendedBytes();
@@ -928,13 +928,13 @@ public class AOFQueuePerformanceTest {
 
         // JDK队列测试
         TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                                           HIGH_CONCURRENCY_THREAD_COUNT,
-                                           1000, false, 1024);
+                HIGH_CONCURRENCY_THREAD_COUNT,
+                1000, false, 1024);
 
         // 双缓冲队列测试
         TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                                                             HIGH_CONCURRENCY_THREAD_COUNT,
-                                                             1000, false, 1024);
+                HIGH_CONCURRENCY_THREAD_COUNT,
+                1000, false, 1024);
 
         // 比较结果
         double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
@@ -960,13 +960,13 @@ public class AOFQueuePerformanceTest {
 
         // JDK队列测试
         TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                                           THREAD_COUNT,
-                                           1000, true, LARGE_DATA_SIZE);
+                THREAD_COUNT,
+                1000, true, LARGE_DATA_SIZE);
 
         // 双缓冲队列测试
         TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                                                             THREAD_COUNT,
-                                                             1000, true, LARGE_DATA_SIZE);
+                THREAD_COUNT,
+                1000, true, LARGE_DATA_SIZE);
 
         // 比较结果
         double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
@@ -992,13 +992,13 @@ public class AOFQueuePerformanceTest {
 
         // JDK队列测试
         TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                                           THREAD_COUNT,
-                                           HIGH_FLUSH_RATE_MS, false, 0);
+                THREAD_COUNT,
+                HIGH_FLUSH_RATE_MS, false, 0);
 
         // 双缓冲队列测试
         TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                                                             THREAD_COUNT,
-                                                             HIGH_FLUSH_RATE_MS, false, 0);
+                THREAD_COUNT,
+                HIGH_FLUSH_RATE_MS, false, 0);
 
         // 比较结果
         double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
@@ -1025,13 +1025,13 @@ public class AOFQueuePerformanceTest {
 
         // JDK队列测试
         TestResult jdkResult = runJdkQueueTest(TEST_DURATION_SECONDS,
-                                           HIGH_CONCURRENCY_THREAD_COUNT,
-                                           HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
+                HIGH_CONCURRENCY_THREAD_COUNT,
+                HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
 
         // 双缓冲队列测试
         TestResult doubleBufferResult = runDoubleBufferQueueTest(TEST_DURATION_SECONDS,
-                                                             HIGH_CONCURRENCY_THREAD_COUNT,
-                                                             HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
+                HIGH_CONCURRENCY_THREAD_COUNT,
+                HIGH_FLUSH_RATE_MS, true, LARGE_DATA_SIZE);
 
         // 比较结果
         double throughputRatio = safeDivide(doubleBufferResult.throughput, jdkResult.throughput);
@@ -1086,7 +1086,7 @@ public class AOFQueuePerformanceTest {
             // 如果没有结果，返回默认值
             return new TestResult(0, 0, 0);
         }
-        
+
         double totalThroughput = 0;
         double totalLatency = 0;
         double totalBytesPerSecond = 0;
@@ -1103,7 +1103,7 @@ public class AOFQueuePerformanceTest {
                 totalBytesPerSecond / results.size()
         );
     }
-    
+
     /**
      * 安全除法，防止除以零导致NaN
      */
@@ -1135,51 +1135,51 @@ public class AOFQueuePerformanceTest {
 
 
 
-             // 运行标准测试
+            // 运行标准测试
 //             logger.info("=================== 标准场景测试 ===================");
-             for (int i = 0; i < TEST_ITERATIONS; i++) {
+            for (int i = 0; i < TEST_ITERATIONS; i++) {
 //                 logger.info("开始第 " + (i+1) + "/" + TEST_ITERATIONS + " 轮测试");
 
-                 // 运行JDK队列测试
-                 TestResult jdkResult = runJdkQueueTest();
-                 jdkResults.add(jdkResult);
+                // 运行JDK队列测试
+                TestResult jdkResult = runJdkQueueTest();
+                jdkResults.add(jdkResult);
 
-                 // 运行双缓冲队列测试
-                 TestResult doubleBufferResult = runDoubleBufferQueueTest();
-                 doubleBufferResults.add(doubleBufferResult);
+                // 运行双缓冲队列测试
+                TestResult doubleBufferResult = runDoubleBufferQueueTest();
+                doubleBufferResults.add(doubleBufferResult);
 
-                 // 短暂休息，让系统恢复
-                 Thread.sleep(2000);
-             }
+                // 短暂休息，让系统恢复
+                Thread.sleep(2000);
+            }
 
-             // 计算平均结果
-             TestResult avgJdkResult = calculateAverageResult(jdkResults);
-             TestResult avgDoubleBufferResult = calculateAverageResult(doubleBufferResults);
+            // 计算平均结果
+            TestResult avgJdkResult = calculateAverageResult(jdkResults);
+            TestResult avgDoubleBufferResult = calculateAverageResult(doubleBufferResults);
 
-             // 比较结果
-             double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
-             double latencyRatio = safeDivide(avgJdkResult.latency, avgDoubleBufferResult.latency);
-             double bytesRatio = safeDivide(avgDoubleBufferResult.bytesPerSecond, avgJdkResult.bytesPerSecond);
+            // 比较结果
+            double throughputRatio = safeDivide(avgDoubleBufferResult.throughput, avgJdkResult.throughput);
+            double latencyRatio = safeDivide(avgJdkResult.latency, avgDoubleBufferResult.latency);
+            double bytesRatio = safeDivide(avgDoubleBufferResult.bytesPerSecond, avgJdkResult.bytesPerSecond);
 
-             logger.info("========== 标准场景测试结果比较 (平均 " + TEST_ITERATIONS + " 次) ==========");
-             logger.info(String.format("JDK队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                     avgJdkResult.throughput, avgJdkResult.latency, avgJdkResult.bytesPerSecond / (1024 * 1024)));
-             logger.info(String.format("双缓冲队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
-                     avgDoubleBufferResult.throughput, avgDoubleBufferResult.latency, avgDoubleBufferResult.bytesPerSecond / (1024 * 1024)));
-             logger.info(String.format("性能比较: 双缓冲队列吞吐量是JDK队列的 %.2f 倍", throughputRatio));
-             logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 (值越小越好)", latencyRatio > 0 ? 1/latencyRatio : 0));
-             logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
+            logger.info("========== 标准场景测试结果比较 (平均 " + TEST_ITERATIONS + " 次) ==========");
+            logger.info(String.format("JDK队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
+                    avgJdkResult.throughput, avgJdkResult.latency, avgJdkResult.bytesPerSecond / (1024 * 1024)));
+            logger.info(String.format("双缓冲队列: 吞吐量 = %.2f 命令/秒, 平均延迟 = %.3f 毫秒, 数据吞吐量 = %.2f MB/秒",
+                    avgDoubleBufferResult.throughput, avgDoubleBufferResult.latency, avgDoubleBufferResult.bytesPerSecond / (1024 * 1024)));
+            logger.info(String.format("性能比较: 双缓冲队列吞吐量是JDK队列的 %.2f 倍", throughputRatio));
+            logger.info(String.format("延迟比较: 双缓冲队列延迟是JDK队列的 %.2f 倍 (值越小越好)", latencyRatio > 0 ? 1/latencyRatio : 0));
+            logger.info(String.format("数据吞吐量比较: 双缓冲队列数据吞吐量是JDK队列的 %.2f 倍", bytesRatio));
 
 
-             // 运行极端场景测试
+            // 运行极端场景测试
             runLargeDataTest();
-             runHighConcurrencyTest();
+            runHighConcurrencyTest();
 
-             runHighFlushRateTest();
-             runExtremeTest();
+            runHighFlushRateTest();
+            runExtremeTest();
 
-             // 清理测试文件
-             cleanupFiles();
+            // 清理测试文件
+            cleanupFiles();
 
             logger.info("AOF队列性能比较测试完成");
 
