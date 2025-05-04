@@ -104,6 +104,16 @@ public class MyRedisService implements RedisService {
                 logger.debug("已更新命令处理器中的复制处理器引用");
             }
         } else if (node != null) {
+            // 如果节点不是主节点，清除复制处理器
+            if (this.replicationHandler != null) {
+                logger.debug("节点 " + node.getId() + " 不再是主节点，清除复制处理器");
+                this.replicationHandler = null;
+
+                // 同步更新命令处理器中的复制处理器引用
+                if (commandHandler != null) {
+                    commandHandler.setReplicationHandler(null);
+                }
+            }
             logger.debug("节点 " + node.getId() + " 是从节点或未启用复制功能");
         }
     }
@@ -263,18 +273,18 @@ public class MyRedisService implements RedisService {
         if (!(message instanceof RespArray)) {
             return "非数组命令";
         }
-        
+
         RespArray commandArray = (RespArray) message;
         Resp[] array = commandArray.getArray();
         if (array.length == 0) {
             return "空命令";
         }
-        
+
         // 只提取命令名称，不再显示详细参数
         if (array[0] instanceof BulkString) {
             return ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
         }
-        
+
         return "未知格式命令";
     }
 

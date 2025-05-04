@@ -53,7 +53,7 @@ public class RedisCluster implements Cluster {
 
     public void addNode(String nodeId, String ip, int port) throws IOException {
         try {
-    
+
 
             ClusterNode node = new ClusterNode(nodeId, ip, port, true);
             MyRedisService service = new MyRedisService(port);
@@ -61,7 +61,7 @@ public class RedisCluster implements Cluster {
 
             if (node.getSlaves() == null) {
                 node.addSlave(null);
-                node.getSlaves().clear(); 
+                node.getSlaves().clear();
             }
 
 
@@ -77,7 +77,7 @@ public class RedisCluster implements Cluster {
 
         } catch (Exception e) {
             System.err.println("Failed to add node " + nodeId + ": " + e.getMessage());
-            e.printStackTrace(); 
+            e.printStackTrace();
             throw e;
         }
     }
@@ -114,7 +114,7 @@ public class RedisCluster implements Cluster {
     private void connectAllNodes(CountDownLatch connectLatch) {
         // 计算需要建立的连接总数
         int totalConnections = nodes.size() * (nodes.size() - 1);
-        
+
         // 为每个节点创建与其他节点的连接
         for (Map.Entry<String, MyRedisService> entry : services.entrySet()) {
             String currentNodeId = entry.getKey();
@@ -153,11 +153,11 @@ public class RedisCluster implements Cluster {
     // 只从从节点连接到主节点 - 符合Redis原生主从架构
     private void connectSlavesToMasters(CountDownLatch connectLatch) {
         System.out.println("在主从模式下建立双向连接...");
-        
+
         // 找出主节点和从节点
         List<ClusterNode> slaveNodes = new ArrayList<>();
         ClusterNode masterNode = null;
-        
+
         for (ClusterNode node : nodes.values()) {
             if (node.isMaster() && node.getSlaves() != null && !node.getSlaves().isEmpty()) {
                 masterNode = node;
@@ -165,38 +165,38 @@ public class RedisCluster implements Cluster {
                 slaveNodes.add(node);
             }
         }
-        
+
         if (masterNode == null || masterNode.getService() == null) {
             System.err.println("错误：找不到主节点或主节点服务实例为空");
             return;
         }
-        
+
         // 总连接数是双向的
         int totalConnections = slaveNodes.size() * 2;
         // 如果提供了CountDownLatch，使用它，否则创建新的
-        final CountDownLatch effectiveConnectLatch = connectLatch != null ? 
+        final CountDownLatch effectiveConnectLatch = connectLatch != null ?
                 connectLatch : new CountDownLatch(totalConnections);
-        
+
         MyRedisService masterService = masterNode.getService();
-        
+
         // 为每个从节点建立双向连接
         for (ClusterNode slaveNode : slaveNodes) {
             if (slaveNode.getService() == null) continue;
-            
+
             final String slaveId = slaveNode.getId();
             final String masterId = masterNode.getId();
             MyRedisService slaveService = slaveNode.getService();
-            
+
             // 1. 从节点到主节点的连接
             ClusterClient slave2master = new ClusterClient(masterNode.getIp(), masterNode.getPort(), slaveService.getRedisCore());
-            
+
             slave2master.connect().thenRun(() -> {
                 slaveService.addClusterClient(masterId, slave2master);
                 effectiveConnectLatch.countDown();
-                
+
                 // 2. 主节点到从节点的连接（用于复制命令）
                 ClusterClient master2slave = new ClusterClient(slaveNode.getIp(), slaveNode.getPort(), masterService.getRedisCore());
-                
+
                 master2slave.connect().thenRun(() -> {
                     masterService.addClusterClient(slaveId, master2slave);
                     effectiveConnectLatch.countDown();
@@ -205,7 +205,7 @@ public class RedisCluster implements Cluster {
                     effectiveConnectLatch.countDown();
                     return null;
                 });
-                
+
             }).exceptionally(e -> {
                 System.err.println("从节点连接主节点失败: " + slaveId + " -> " + masterId);
                 // 两次减少计数，因为主到从的连接也不会建立
@@ -215,7 +215,7 @@ public class RedisCluster implements Cluster {
             });
         }
     }
-    
+
     // 寻找从节点对应的主节点
     private ClusterNode findMasterForSlave(ClusterNode slaveNode) {
         // 遍历所有主节点
@@ -237,13 +237,13 @@ public class RedisCluster implements Cluster {
         if (master.getSlaves() == null) {
             return false;
         }
-        
+
         for (ClusterNode existingSlave : master.getSlaves()) {
             if (existingSlave != null && existingSlave.getId().equals(slave.getId())) {
                 return true;
             }
         }
-        
+
         return false;
     }
 
@@ -262,5 +262,24 @@ public class RedisCluster implements Cluster {
 
     public void setShardingEnabled(boolean shardingEnabled) {
         this.shardingEnabled = shardingEnabled;
+    }
+
+    /**
+     * 获取集群中所有节点的ID列表
+     *
+     * @return 节点ID列表
+     */
+    public List<String> getNodeIds() {
+        return new ArrayList<>(nodes.keySet());
+    }
+
+    /**
+     * 根据节点ID获取ClusterNode对象
+     *
+     * @param nodeId 节点ID
+     * @return ClusterNode对象，如果不存在返回null
+     */
+    public ClusterNode getClusterNode(String nodeId) {
+        return nodes.get(nodeId);
     }
 }

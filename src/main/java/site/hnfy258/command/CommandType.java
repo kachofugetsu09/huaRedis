@@ -52,7 +52,7 @@ public enum CommandType {
     TYPE(Type::new),
     SAVE(Save::new),
     BGSAVE(Bgsave::new),
-    GET(Get::new), BGREWRITEAOF(BgRewriteAOF::new);
+    GET(Get::new), BGREWRITEAOF(BgRewriteAOF::new), SLAVEOF(SlaveOf::new);
 
 
     private final Function<RedisCore, Command> supplier;

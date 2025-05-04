@@ -60,5 +60,33 @@ public class ClusterNode {
 
     public void setMaster(boolean b) {
         isMaster = b;
+
+        // 初始化从节点列表（如果还没有）
+        if (isMaster && slaves == null) {
+            slaves = new ArrayList<>();
+        }
+    }
+
+    /**
+     * 从从节点列表中移除指定的从节点
+     *
+     * @param slave 要移除的从节点
+     * @return 如果成功移除返回true，否则返回false
+     */
+    public boolean removeSlave(ClusterNode slave) {
+        if (slaves == null || slave == null) {
+            return false;
+        }
+
+        // 使用节点ID进行比较，因为可能传入的是不同的对象实例
+        for (int i = 0; i < slaves.size(); i++) {
+            ClusterNode currentSlave = slaves.get(i);
+            if (currentSlave != null && currentSlave.getId().equals(slave.getId())) {
+                slaves.remove(i);
+                return true;
+            }
+        }
+
+        return false;
     }
 }
