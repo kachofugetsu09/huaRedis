@@ -6,6 +6,7 @@ import io.netty.channel.SimpleChannelInboundHandler;
 import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.aof.AOFHandler;
+import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.cluster.RedisCluster;
 import site.hnfy258.cluster.replication.ReplicationHandler;
 import site.hnfy258.command.Command;
@@ -22,6 +23,8 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @ChannelHandler.Sharable
 public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
@@ -175,6 +178,7 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
         String currentNodeId = redisCore.getRedisService().getCurrentNode().getId();
 
         if (currentNodeId.equals(targetNodeId)) {
+            // 如果当前节点就是目标节点，直接在本地执行命令
             Command command = commandType.getSupplier().apply(redisCore);
             command.setContext(commandArray.getArray());
             Resp result = command.handle();
@@ -186,26 +190,85 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
 
             return result;
         } else {
-            Resp result = forwardToTargetNode(targetNodeId, commandArray);
-            return result;
+            // 否则转发到目标节点
+            return forwardToTargetNode(targetNodeId, commandArray);
         }
     }
 
     private Resp forwardToTargetNode(String targetNodeId, RespArray commandArray) {
         try {
-            // 获取目标节点的服务实例
-            RedisCluster cluster = redisCore.getRedisService().getCluster();
-            MyRedisService targetService = cluster.getNode(targetNodeId);
-
-            if (targetService != null) {
-                // 转发命令到目标节点
-                return targetService.executeCommand(commandArray);
-            } else {
-                return new Errors("ERR target node not available: " + targetNodeId);
+            // 获取当前服务和集群
+            MyRedisService currentService = redisCore.getRedisService();
+            RedisCluster cluster = currentService.getCluster();
+            
+            if (cluster == null) {
+                return new Errors("ERR 集群未初始化，无法转发命令");
+            }
+            
+            // 获取当前节点和目标节点
+            ClusterNode currentNode = currentService.getCurrentNode();
+            ClusterNode targetNode = cluster.getClusterNode(targetNodeId);
+            
+            if (currentNode == null) {
+                return new Errors("ERR 当前节点未初始化，无法转发命令");
+            }
+            
+            if (targetNode == null) {
+                return new Errors("ERR 找不到目标节点: " + targetNodeId);
+            }
+            
+            // 检查目标节点是否可用
+            if (!targetNode.isActive()) {
+                logger.warn("目标节点 " + targetNodeId + " 连接不可用，尝试重新连接");
+                
+                // 尝试重新连接
+                try {
+                    CompletableFuture<Void> connectFuture = targetNode.connect();
+                    // 等待连接完成，最多等待5秒
+                    connectFuture.get(5, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    logger.error("重新连接到目标节点失败: " + e.getMessage());
+                    return new Errors("ERR 目标节点不可用: " + targetNodeId);
+                }
+            }
+            
+            // 命令类型和名称
+            Resp[] array = commandArray.getArray();
+            String commandName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
+            
+            // 对于一些重要的命令，我们需要提供更详细的日志
+            boolean isImportantCommand = CommandUtils.isWriteCommand(commandName);
+            
+            if (isImportantCommand) {
+                logger.info("转发写命令: " + formatCommand(commandArray) + " 到节点: " + targetNodeId);
+            }
+            
+            // 创建一个带超时的Future来异步处理响应
+            CompletableFuture<Resp> responseFuture = new CompletableFuture<>();
+            
+            // 发送命令
+            targetNode.sendMessageAsync(commandArray)
+                .thenRun(() -> {
+                    logger.debug("命令 " + commandName + " 已成功发送到目标节点: " + targetNodeId);
+                    
+                    responseFuture.complete(new SimpleString("OK (已转发到节点 " + targetNodeId + ")"));
+                })
+                .exceptionally(e -> {
+                    logger.error("发送命令到目标节点失败: " + e.getMessage());
+                    responseFuture.complete(new Errors("ERR 命令发送失败: " + e.getMessage()));
+                    return null;
+                });
+                
+            try {
+                // 最多等待3秒获取响应
+                return responseFuture.get(3, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                logger.error("等待命令响应超时", e);
+                return new Errors("ERR 等待响应超时");
             }
         } catch (Exception e) {
-            logger.error("Error forwarding command to node " + targetNodeId, e);
-            return new Errors("ERR forwarding failed: " + e.getMessage());
+            logger.error("向节点 " + targetNodeId + " 转发命令时出错", e);
+            return new Errors("ERR 转发失败: " + e.getMessage());
         }
     }
 

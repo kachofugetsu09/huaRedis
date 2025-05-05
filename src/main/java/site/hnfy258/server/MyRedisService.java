@@ -1,6 +1,5 @@
 package site.hnfy258.server;
 
-import com.sun.corba.se.impl.presentation.rmi.ExceptionHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
@@ -12,7 +11,6 @@ import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
 import site.hnfy258.RedisCoreImpl;
 import site.hnfy258.aof.AOFSyncStrategy;
-import site.hnfy258.cluster.ClusterClient;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.cluster.RedisCluster;
 import site.hnfy258.cluster.replication.ReplicationHandler;
@@ -20,23 +18,20 @@ import site.hnfy258.coder.*;
 import site.hnfy258.channel.DefaultChannelSelectStrategy;
 import site.hnfy258.channel.LocalChannelOption;
 import site.hnfy258.aof.AOFHandler;
-import site.hnfy258.command.Command;
-import site.hnfy258.command.CommandType;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.protocal.*;
 import site.hnfy258.rdb.core.RDBHandler;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class MyRedisService implements RedisService {
     private static final Logger logger = Logger.getLogger(MyRedisService.class);
 
     // 通过修改这些标志来开启或关闭AOF和RDB功能
-    private static final boolean ENABLE_AOF = true;
+    private static final boolean ENABLE_AOF = false;
     private static final boolean ENABLE_RDB = false;
-    private static final boolean ENABLE_REPLICATION = false;
+    private static final boolean ENABLE_REPLICATION = true;
 
     private static final boolean ENABLE_COMPRESSION = false;
 
@@ -46,7 +41,7 @@ public class MyRedisService implements RedisService {
 
     private RedisCluster cluster;
     private ClusterNode currentNode;
-    private final Map<String, ClusterClient> clusterClients = new ConcurrentHashMap<>();
+    
     public MyCommandHandler commandHandler;
 
     private final int port;
@@ -60,21 +55,7 @@ public class MyRedisService implements RedisService {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
 
-    private  ReplicationHandler replicationHandler;
-
-
-    // 添加方法管理集群连接
-    public void addClusterClient(String nodeId, ClusterClient client) {
-        clusterClients.put(nodeId, client);
-    }
-
-    public ClusterClient getClusterClient(String nodeId) {
-        return clusterClients.get(nodeId);
-    }
-
-    public Map<String, ClusterClient> getClusterClients() {
-        return clusterClients;
-    }
+    private ReplicationHandler replicationHandler;
 
     public void setCluster(RedisCluster cluster) {
         this.cluster = cluster;
@@ -89,15 +70,14 @@ public class MyRedisService implements RedisService {
 
         // 根据节点类型和集群配置初始化复制处理器
         if (ENABLE_REPLICATION && node != null && node.isMaster()) {
+            // 无论是分片模式还是非分片模式，都使用相同的ReplicationHandler初始化
+            this.replicationHandler = new ReplicationHandler(node);
             if (cluster != null && cluster.isShardingEnabled()) {
-                // 分片模式下，使用全连接网络的复制处理
-                this.replicationHandler = new ReplicationHandler(node);
                 logger.debug("主节点 " + node.getId() + " 在分片模式下初始化复制处理器");
             } else {
-                // 非分片模式下，采用标准Redis主从复制模式
-                this.replicationHandler = new ReplicationHandler(node);
                 logger.debug("主节点 " + node.getId() + " 在主从模式下初始化复制处理器");
             }
+            
             // 更新命令处理器中的复制处理器引用
             if (commandHandler != null) {
                 commandHandler.setReplicationHandler(this.replicationHandler);
@@ -145,10 +125,7 @@ public class MyRedisService implements RedisService {
             this.aofHandler = null;
         }
 
-        // Initialize replicationHandler as null first
         this.replicationHandler = null;
-        // ReplicationHandler will be properly initialized after the node is set
-        // This prevents NullPointerException during initialization
     }
 
     @Override
@@ -167,7 +144,7 @@ public class MyRedisService implements RedisService {
             }
 
             // 创建统一的命令处理器
-            this.commandHandler = new MyCommandHandler(redisCore, aofHandler, rdbHandler,replicationHandler);
+            this.commandHandler = new MyCommandHandler(redisCore, aofHandler, rdbHandler, replicationHandler);
 
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
@@ -248,44 +225,34 @@ public class MyRedisService implements RedisService {
         }
     }
 
-    public void sendMessageToNode(String toNodeId, Resp message) {
-        ClusterClient client = clusterClients.get(toNodeId);
-        if (client != null && client.isActive()) {  // 确保连接活跃
-            if (logger.isDebugEnabled()) {
-                String cmdName = "未知命令";
-                if (message instanceof RespArray) {
-                    RespArray array = (RespArray) message;
-                    if (array.getArray().length > 0 && array.getArray()[0] instanceof BulkString) {
-                        cmdName = ((BulkString) array.getArray()[0]).getContent().toUtf8String().toUpperCase();
-                    }
+    /**
+     * 向指定节点发送消息
+     * @param toNodeId 目标节点ID
+     * @param message 要发送的消息
+     * @return 是否发送成功
+     */
+    public boolean sendMessageToNode(String toNodeId, Resp message) {
+        // 使用集群的sendMessage方法
+        if (currentNode != null && cluster != null) {
+            return cluster.sendMessage(currentNode.getId(), toNodeId, message);
+        }
+        return false;
+    }
+
+    /**
+     * 向所有从节点广播消息
+     * @param message 要广播的消息
+     */
+    public void broadcastToSlaves(Resp message) {
+        if (currentNode != null && currentNode.isMaster() && currentNode.getSlaves() != null) {
+            for (ClusterNode slave : currentNode.getSlaves()) {
+                if (slave != null) {
+                    sendMessageToNode(slave.getId(), message);
                 }
-                logger.debug("向节点 " + toNodeId + " 发送命令: " + cmdName);
             }
-            client.sendMessage(message);
-        } else {
-            logger.warn("无法发送命令到节点 " + toNodeId + ": 连接不活跃");
         }
     }
 
-    // 简化格式化命令的方法
-    private String formatMessage(Resp message) {
-        if (!(message instanceof RespArray)) {
-            return "非数组命令";
-        }
-
-        RespArray commandArray = (RespArray) message;
-        Resp[] array = commandArray.getArray();
-        if (array.length == 0) {
-            return "空命令";
-        }
-
-        // 只提取命令名称，不再显示详细参数
-        if (array[0] instanceof BulkString) {
-            return ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
-        }
-
-        return "未知格式命令";
-    }
 
     @Override
     public MyRedisService getRedisService() {
@@ -306,11 +273,90 @@ public class MyRedisService implements RedisService {
     }
 
     public ClusterNode getCurrentNode() {
-        return this.currentNode;
+        return currentNode;
     }
 
-
     public AOFHandler getAofHandler() {
-        return this.aofHandler;
+        return aofHandler;
+    }
+
+    private String formatMessage(Resp message) {
+        if (message == null) {
+            return "null";
+        }
+        
+        if (message instanceof RespArray) {
+            RespArray array = (RespArray) message;
+            Resp[] respArray = array.getArray();
+            
+            if (respArray.length == 0) {
+                return "[]";
+            }
+            
+            StringBuilder sb = new StringBuilder();
+            if (respArray[0] instanceof BulkString) {
+                // 获取命令名称
+                String cmdName = ((BulkString) respArray[0]).getContent().toUtf8String();
+                sb.append(cmdName.toUpperCase());
+                
+                // 添加参数（最多显示3个）
+                for (int i = 1; i < respArray.length && i < 4; i++) {
+                    sb.append(" ");
+                    if (respArray[i] instanceof BulkString) {
+                        BytesWrapper content = ((BulkString) respArray[i]).getContent();
+                        if (content == null) {
+                            sb.append("(nil)");
+                        } else {
+                            // 如果参数太长，截断显示
+                            String paramStr = content.toUtf8String();
+                            if (paramStr.length() > 30) {
+                                sb.append(paramStr.substring(0, 27)).append("...");
+                            } else {
+                                sb.append(paramStr);
+                            }
+                        }
+                    } else {
+                        sb.append(respArray[i].toString());
+                    }
+                }
+                
+                // 如果有更多参数，显示省略号
+                if (respArray.length > 4) {
+                    sb.append(" ...");
+                }
+                
+                // 显示参数总数
+                sb.append(" (共").append(respArray.length - 1).append("个参数)");
+            } else {
+                sb.append("RespArray[");
+                for (int i = 0; i < respArray.length && i < 3; i++) {
+                    if (i > 0) sb.append(", ");
+                    sb.append(respArray[i].toString());
+                }
+                if (respArray.length > 3) {
+                    sb.append("...");
+                }
+                sb.append("]");
+            }
+            
+            return sb.toString();
+        } else if (message instanceof SimpleString) {
+            return "SimpleString: " + ((SimpleString) message).getContent();
+        } else if (message instanceof BulkString) {
+            BytesWrapper content = ((BulkString) message).getContent();
+            if (content == null) {
+                return "BulkString: (nil)";
+            }
+            
+            String strContent = content.toUtf8String();
+            if (strContent.length() > 50) {
+                return "BulkString: " + strContent.substring(0, 47) + "...";
+            }
+            return "BulkString: " + strContent;
+        } else if (message instanceof Errors) {
+            return "Error: " + ((Errors) message).getContent();
+        } else {
+            return message.toString();
+        }
     }
 }

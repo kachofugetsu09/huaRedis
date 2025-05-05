@@ -1,26 +1,20 @@
 package site.hnfy258.cluster.replication;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
-import site.hnfy258.cluster.ClusterClient;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.protocal.BulkString;
 import site.hnfy258.protocal.Resp;
 import site.hnfy258.protocal.RespArray;
-import site.hnfy258.protocal.SimpleString;
 import site.hnfy258.server.MyRedisService;
 import site.hnfy258.command.CommandUtils;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ScheduledExecutorService;
 
 public class ReplicationHandler {
     private static final Logger logger = Logger.getLogger(ReplicationHandler.class);
@@ -50,8 +44,6 @@ public class ReplicationHandler {
                    ", 从节点数=" + (masterNode.getSlaves() != null ? masterNode.getSlaves().size() : 0));
     }
 
-
-
     private boolean isSelectCommand(RespArray commandArray) {
         Resp[] array = commandArray.getArray();
         if (array.length > 0 && array[0] instanceof BulkString) {
@@ -68,7 +60,7 @@ public class ReplicationHandler {
             try {
                 return Integer.parseInt(indexStr);
             } catch (NumberFormatException e) {
-                logger.error("Invalid DB index format: " + indexStr, e);
+                logger.error("无效的数据库索引格式: " + indexStr, e);
             }
         }
         return 0; // 默认数据库索引
@@ -130,13 +122,9 @@ public class ReplicationHandler {
                     String slaveId = slaveNode.getId();
                     slaveIds.add(slaveId);
                     
-                    // 获取从节点的客户端
-                    ClusterClient slaveClient = masterService.getClusterClient(slaveId);
-                    
-                    // 如果没有连接可用，跳过该从节点
-                    if (slaveClient == null || !slaveClient.isActive()) {
-                        logger.warn("与从节点 " + slaveId + " 的连接不可用，无法复制命令 " + 
-                                  (slaveClient == null ? "(连接为空)" : "(连接不活跃)"));
+                    // 获取从节点
+                    if (!slaveNode.isActive()) {
+                        logger.warn("从节点 " + slaveId + " 连接不可用，无法复制命令");
                         continue;
                     }
                     
@@ -145,23 +133,24 @@ public class ReplicationHandler {
                     final int currentDbIndexFinal = currentDbIndex;
                     final boolean isSelectCommandFinal = isSelectCommand;
                     final String slaveIdFinal = slaveId;
+                    final ClusterNode slaveNodeFinal = slaveNode;
                     
                     // 异步发送命令
                     CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                         try {
                             if (isSelectCommandFinal) {
-                                slaveClient.sendMessageAsync(commandArray);
+                                slaveNodeFinal.sendMessageAsync(commandArray);
                                 slaveDbIndices.put(slaveIdFinal, selectDbIndex);
                             } else {
                                 // 如果数据库索引不匹配，先发送SELECT命令
                                 if (slaveDbIndex != currentDbIndexFinal) {
                                     RespArray selectCommand = createSelectCommand(currentDbIndexFinal);
-                                    slaveClient.sendMessageAsync(selectCommand);
+                                    slaveNodeFinal.sendMessageAsync(selectCommand);
                                     slaveDbIndices.put(slaveIdFinal, currentDbIndexFinal);
                                 }
                                 
-                                //真正的命令发送
-                                slaveClient.sendMessageAsync(commandArray);
+                                // 发送实际命令
+                                slaveNodeFinal.sendMessageAsync(commandArray);
                             }
                         } catch (Exception e) {
                             logger.error("复制命令到从节点 " + slaveIdFinal + " 失败: " + e.getMessage());
@@ -170,7 +159,6 @@ public class ReplicationHandler {
                     
                     futures.add(future);
                 }
-                
                 
                 // 重要命令记录复制状态
                 if (isWriteCommand || isSelectCommand) {

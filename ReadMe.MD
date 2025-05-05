@@ -114,7 +114,8 @@ HuaRedis是一个基于Java和Netty实现的高性能Redis服务器，提供了R
 - [x] RDB持久化（增量与全量）
 - [x] 分片集群支持
 - [x] 主从复制（基础功能）
-- [ ] 哨兵模式 高可用实现
+- [ ] 高可用实现
+
 
 ![HuaRedis.png](HuaRedis.png)
 
