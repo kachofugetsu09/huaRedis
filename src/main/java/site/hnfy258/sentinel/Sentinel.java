@@ -8,7 +8,7 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import site.hnfy258.cluster.ClusterClient;
+import org.apache.log4j.Logger;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
@@ -19,135 +19,108 @@ import site.hnfy258.protocal.SimpleString;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.*;
 
 public class Sentinel {
 
+    Logger logger = Logger.getLogger(Sentinel.class);
+    private String sentinelId;
     private String host;
     private int port;
 
-    List<ClusterClient> clusterClients;
-    List<Sentinel> neighborSentinels;
-    ScheduledExecutorService  normalScheduler;
-    ScheduledExecutorService extremeScheduler;
+    private Map<String, Sentinel> neighborSentinels;
 
-    private Map<String, ClusterNode> allNodes;
-    private Map<String, ClusterNode> masterNodes;
+    private Map<String, ClusterNode> monitoredNodes;
 
-    private static final int DOWN_AFTER_MILLS = 3000;
-    private static final int NORMAL_PING_INTERVAL = 1000;
-    private static final int EXTREM_PING_INTERVAL = 100;
+    private Set<String> subjectiveDownNodes;
+    private Set<String> objectiveDownNodes;
 
-    List<ClusterClient> SdownedClients;
+    private Map<String, Map<String, Boolean>> sentinelOpinons;
 
-    private Channel channel;
+    private int quorum;
 
-    public Sentinel(String host, int port) {
+    private ScheduledExecutorService scheduledExecutor;
+
+    private Map<String, Long> lastReplyTime;
+
+
+    public Sentinel(String sentinelId, String host, int port, int quorum) {
+        this.sentinelId = sentinelId;
         this.host = host;
         this.port = port;
-        this.SdownedClients = new ArrayList<>();
+        this.quorum = quorum;
+
+
+        this.neighborSentinels = new ConcurrentHashMap<>();
+        this.monitoredNodes = new ConcurrentHashMap<>();
+        this.subjectiveDownNodes = ConcurrentHashMap.newKeySet();
+        this.objectiveDownNodes = ConcurrentHashMap.newKeySet();
+        this.sentinelOpinons= new ConcurrentHashMap<>();
+
+        this.scheduledExecutor = Executors.newScheduledThreadPool(2);
+
+    }
+    public void startMonitoring() {
+        //检测主观下线
+        scheduledExecutor.scheduleAtFixedRate(this::checkMasterStatus,0,1,TimeUnit.SECONDS);
+
+        //检测客观下线
+        scheduledExecutor.scheduleAtFixedRate(this::exchangeSentinelInfo,0,1,TimeUnit.SECONDS);
     }
 
-    public List<ClusterNode> getSlaveOfMaster(String masterId){
-        List<ClusterNode> slaves = new ArrayList<>();
-        for(ClusterNode node:allNodes.values()){
-            if(node.getMasterId().equals(masterId)){
-                slaves.add(node);
+    private void exchangeSentinelInfo() {
+        for(String masterId: subjectiveDownNodes){
+            sentinelOpinons.putIfAbsent(masterId,new ConcurrentHashMap<>());
+
+            sentinelOpinons.get(masterId).put(sentinelId,true);
+
+            for(Map.Entry<String,Sentinel> entry: neighborSentinels.entrySet()){
+                String neighborId = entry.getKey();
+                Sentinel neighbor = entry.getValue();
+
+                try{
+                    boolean isDown = askNeighborAboutNode(neighbor,masterId);
+                    sentinelOpinons.get(masterId).put(neighborId,isDown);
+                }catch(Exception e){
+                    logger.error("Ask neighbor about node failed",e);
+                }
+            }
+
+            long downVotes = sentinelOpinons.get(masterId).values().stream().filter(isDown->isDown).count();
+
+            if(downVotes>=quorum){
+                objectiveDownNodes.add(masterId);
+                logger.info("Master "+masterId+" is down");
+            }
+
+            else{
+                objectiveDownNodes.remove(masterId);
             }
         }
-        return slaves;
+    }
+
+    private boolean askNeighborAboutNode(Sentinel neighbor, String masterId) {
+        return false;
     }
 
 
-    public ClusterNode getMasterOfNode(ClusterNode node){
-        if(!node.isMaster()){
-            return allNodes.get(node.getMasterId());
-        }
-
-        return null;
-    }
-
-    public void addNeighborSentinel(Sentinel sentinel){
-        neighborSentinels.add(sentinel);
-    }
-
-    public void addClusterClient(ClusterClient clusterClient){
-        clusterClients.add(clusterClient);
-        clusterClient.addSentinel(this);
-        clusterClient.connect();
-        this.connect();
-    }
-
-    private void connect() {
-    }
-
-    public void start(){
-        Bootstrap bootstrap = new Bootstrap();
-        NioEventLoopGroup group = new NioEventLoopGroup();
-        bootstrap.group(group)
-                .channel(NioSocketChannel.class)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-                .handler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel ch) throws Exception {
-                        ChannelPipeline pipeline = ch.pipeline();
-                        pipeline.addLast(new MyDecoder());
-                        pipeline.addLast(new MyResponseEncoder());
-                    }
-                });
-
-        bootstrap.bind(host,port).addListener(future -> {
-            if(future.isSuccess()){
-                System.out.println("sentinel start");
+    private void checkMasterStatus() {
+        for(Map.Entry<String, ClusterNode> entry: monitoredNodes.entrySet()){
+            String masterId = entry.getKey();
+            ClusterNode node = entry.getValue();
+            //todo 完善主观下线检测
+            if(true){
+                subjectiveDownNodes.add(masterId);
+                node.disconnect();
             }
             else{
-                System.out.println("sentinel start error");
-            }
-        });
-
-        normalScheduler = Executors.newSingleThreadScheduledExecutor();
-        extremeScheduler = Executors.newSingleThreadScheduledExecutor();
-
-        startNormalPing();
-        startExtremePing();
-    }
-
-    private void startExtremePing() {
-        extremeScheduler.scheduleAtFixedRate(()->{
-            for(ClusterClient clusterClient:clusterClients){
-                if(!clusterClient.isActive() &&
-                        SdownedClients.contains(clusterClient)){
-                    clusterClient.sendMessage(new SimpleString("PING"));
+                //如果恢复
+                subjectiveDownNodes.remove(masterId);
+                if(node.isActive()){
+                    node.connect();
                 }
             }
-        }, 0,EXTREM_PING_INTERVAL, TimeUnit.MILLISECONDS);
+        }
     }
-
-    private void startNormalPing() {
-        normalScheduler.scheduleAtFixedRate(()->{
-            for(ClusterClient clusterClient:clusterClients){
-                if(clusterClient.isActive() && !
-                        SdownedClients.contains(clusterClient)){
-                    clusterClient.sendMessage(new SimpleString("PING"));
-                }
-            }
-        }, 0,NORMAL_PING_INTERVAL, TimeUnit.MILLISECONDS);
-    }
-
-
-    private void notifyOtherSentinels(){
-
-    }
-
-    public  List<ClusterClient> getSdownedClients(){
-        return SdownedClients;
-    }
-
-    public void sendMessage(RespArray message){
-
-    }
-
-
-
-
 }

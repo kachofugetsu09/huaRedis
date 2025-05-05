@@ -516,6 +516,10 @@ public class AOFQueuePerformanceTest {
             }
         }
 
+        @Override
+        public void start() {
+        }
+
         public long getBytesWritten() {
             return bytesWritten.get();
         }
