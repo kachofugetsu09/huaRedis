@@ -465,4 +465,94 @@ public class RedisCluster implements Cluster {
             return message.toString();
         }
     }
+
+    /**
+     * 处理节点优雅下线
+     * 确保当一个节点下线时不会影响其他节点的运行
+     * 
+     * @param nodeId 要下线的节点ID
+     */
+    @Override
+    public void handleNodeGracefulShutdown(String nodeId) {
+        ClusterNode node = nodes.get(nodeId);
+        
+        if (node == null) {
+            System.err.println("无法处理节点下线: 未找到节点 " + nodeId);
+            return;
+        }
+        
+        System.out.println("处理节点 " + nodeId + " 优雅下线");
+        
+        try {
+            // 锁定当前正在处理的节点，阻止其他操作同时进行
+            synchronized (node) {
+                boolean isMaster = node.isMaster();
+                
+                if (isMaster) {
+                    System.out.println("主节点 " + nodeId + " 正在下线");
+                    // 主节点下线，通知从节点但不执行转移操作
+                    if (node.getSlaves() != null) {
+                        for (ClusterNode slave : node.getSlaves()) {
+                            if (slave != null && slave.isActive()) {
+                                try {
+                                    System.out.println("通知从节点 " + slave.getId() + " 主节点下线");
+                                    // 这里只是通知，不触发转移逻辑
+                                    RespArray infoCommand = new RespArray(new Resp[]{
+                                        new BulkString(new BytesWrapper("_MASTER_OFFLINE".getBytes(BytesWrapper.CHARSET))),
+                                        new BulkString(new BytesWrapper(nodeId.getBytes(BytesWrapper.CHARSET)))
+                                    });
+                                    slave.sendMessage(infoCommand);
+                                } catch (Exception e) {
+                                    System.err.println("通知从节点失败: " + e.getMessage());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    System.out.println("从节点 " + nodeId + " 正在下线");
+                    // 从节点下线，通知主节点
+                    String masterId = node.getMasterId();
+                    if (masterId != null) {
+                        ClusterNode master = nodes.get(masterId);
+                        if (master != null && master.isActive()) {
+                            try {
+                                System.out.println("通知主节点 " + masterId + " 从节点下线");
+                                RespArray infoCommand = new RespArray(new Resp[]{
+                                    new BulkString(new BytesWrapper("_SLAVE_OFFLINE".getBytes(BytesWrapper.CHARSET))),
+                                    new BulkString(new BytesWrapper(nodeId.getBytes(BytesWrapper.CHARSET)))
+                                });
+                                master.sendMessage(infoCommand);
+                                
+                                // 从主节点的从节点列表中移除
+                                if (master.getSlaves() != null) {
+                                    master.getSlaves().removeIf(slave -> slave != null && slave.getId().equals(nodeId));
+                                    System.out.println("已从主节点的从节点列表中移除: " + nodeId);
+                                }
+                            } catch (Exception e) {
+                                System.err.println("通知主节点失败: " + e.getMessage());
+                            }
+                        }
+                    }
+                }
+                
+                // 安全断开节点连接
+                try {
+                    node.disconnect();
+                    System.out.println("已断开节点 " + nodeId + " 的连接");
+                } catch (Exception e) {
+                    System.err.println("断开节点连接失败: " + e.getMessage());
+                }
+                
+                // 从集群服务列表中移除，但保留节点信息以便后续恢复
+                services.remove(nodeId);
+                System.out.println("节点 " + nodeId + " 已从活跃服务列表中移除");
+                
+                // 保留在nodes集合中，但标记为非活跃
+                System.out.println("节点 " + nodeId + " 已完成优雅下线处理");
+            }
+        } catch (Exception e) {
+            System.err.println("处理节点下线时发生错误: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 }

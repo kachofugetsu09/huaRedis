@@ -32,7 +32,10 @@ public class CommandUtils {
             CommandType.ZADD, CommandType.ZREM,
 
             // 数据库操作
-            CommandType.SELECT, CommandType.SAVE
+            CommandType.SELECT, CommandType.SAVE,
+            
+            // 系统操作
+            CommandType.SHUTDOWN
     );
 
     // 静默命令（不需要记录日志的命令）
@@ -42,7 +45,7 @@ public class CommandUtils {
 
     // 不需要复制的命令
     private static final Set<String> NON_REPLICATE_COMMANDS = Collections.unmodifiableSet(
-            new HashSet<>(Arrays.asList("SCAN", "PING", "INFO", "SLAVEOF"))
+            new HashSet<>(Arrays.asList("SCAN", "PING", "INFO", "SLAVEOF", "SHUTDOWN"))
     );
 
     /**

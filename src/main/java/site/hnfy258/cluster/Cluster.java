@@ -14,4 +14,6 @@ public interface Cluster {
     void initializeSharding();
 
     String getNodeForKey(BytesWrapper key);
+
+    void handleNodeGracefulShutdown(String nodeId);
 }

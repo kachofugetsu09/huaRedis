@@ -359,4 +359,47 @@ public class MyRedisService implements RedisService {
             return message.toString();
         }
     }
+
+
+    /**
+     * 关闭单个Redis节点
+     * 执行保存数据等清理工作后关闭服务，但不触发System.exit()
+     */
+    public void shutdownSingleNode() {
+        logger.info("正在关闭单个Redis节点...");
+        
+        try {
+            // 如果启用了RDB，先进行数据保存
+            if (ENABLE_RDB && rdbHandler != null) {
+                logger.info("执行RDB保存...");
+                rdbHandler.save();
+            }
+            
+            // 如果启用了AOF，确保数据刷新
+            if (ENABLE_AOF && aofHandler != null) {
+                logger.info("刷新AOF文件...");
+                aofHandler.stop();
+            }
+            
+            // 通知集群处理节点优雅下线
+            if (cluster != null && currentNode != null) {
+                String nodeId = currentNode.getId();
+                logger.info("通知集群节点准备下线: " + nodeId);
+                
+                // 使用优雅下线处理机制
+                cluster.handleNodeGracefulShutdown(nodeId);
+                
+                // 仅关闭当前节点相关资源，不影响集群中其他节点
+                logger.info("关闭当前节点网络连接...");
+                close();
+                
+                logger.info("Redis节点已成功下线");
+            } else {
+                logger.info("节点未关联到集群，直接关闭网络连接...");
+                close();
+            }
+        } catch (Exception e) {
+            logger.error("关闭Redis节点时发生错误", e);
+        }
+    }
 }

@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * 重构后的ClusterNode类，整合了ClusterClient的功能
@@ -44,11 +45,13 @@ public class ClusterNode {
     // Redis服务相关
     private MyRedisService service;
     private RedisCore redisCore;
-    
-    // 网络连接相关（原ClusterClient功能）
+
     private Channel channel;
     private EventLoopGroup group;
     private boolean connected = false;
+    
+    // 响应回调
+    private Consumer<Resp> responseCallback;
     
     /**
      * 创建一个新的集群节点
@@ -63,6 +66,22 @@ public class ClusterNode {
         this.port = port;
         this.isMaster = isMaster;
         this.slaves = new ArrayList<>();
+    }
+    
+    /**
+     * 设置节点响应回调
+     * @param callback 响应回调函数
+     */
+    public void setResponseCallback(Consumer<Resp> callback) {
+        this.responseCallback = callback;
+    }
+    
+    /**
+     * 获取当前节点的响应回调
+     * @return 响应回调函数
+     */
+    public Consumer<Resp> getResponseCallback() {
+        return responseCallback;
     }
     
     /**
@@ -103,7 +122,7 @@ public class ClusterNode {
                         ChannelPipeline pipeline = ch.pipeline();
                         pipeline.addLast(new MyDecoder());
                         pipeline.addLast(new MyResponseEncoder());
-                        pipeline.addLast(new ClusterNodeHandler(redisCore));
+                        pipeline.addLast(new ClusterNodeHandler(redisCore, ClusterNode.this));
                     }
                 });
 
@@ -121,8 +140,10 @@ public class ClusterNode {
                 channel = f.channel();
                 future.complete(null);
             } else if (retries > 0) {
-                logger.info(String.format("连接到 %s:%d 失败，剩余重试次数: %d. 正在重试...",
-                        host, port, retries));
+                if (logger.isDebugEnabled()) {
+                    logger.debug(String.format("连接到 %s:%d 失败，剩余重试次数: %d. 正在重试...",
+                            host, port, retries));
+                }
                 f.channel().eventLoop().schedule(() ->
                                 connectWithRetry(bootstrap, host, port, future, retries - 1, delayMs),
                         delayMs, TimeUnit.MILLISECONDS);
@@ -375,14 +396,47 @@ public class ClusterNode {
     private static class ClusterNodeHandler extends SimpleChannelInboundHandler<Resp> {
         private static final Logger logger = Logger.getLogger(ClusterNodeHandler.class);
         private final RedisCore redisCore;
+        private final ClusterNode node;
         private int currentDbIndex = 0;
 
-        public ClusterNodeHandler(RedisCore redisCore) {
+        public ClusterNodeHandler(RedisCore redisCore, ClusterNode node) {
             this.redisCore = redisCore;
+            this.node = node;
         }
         
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, Resp msg) {
+
+            boolean isPongResponse = (msg instanceof SimpleString && "PONG".equalsIgnoreCase(((SimpleString) msg).getContent()));
+            
+            if (!isPongResponse && logger.isDebugEnabled()) {
+                logger.debug("[节点] " + node.getId() + " 收到响应: " + 
+                          (msg instanceof SimpleString ? ((SimpleString) msg).getContent() : msg.getClass().getSimpleName()));
+            }
+            
+            if (node.getResponseCallback() != null) {
+                try {
+                    // 移除过多日志输出，只在debug级别保留
+                    if (!isPongResponse && logger.isDebugEnabled()) {
+                        logger.debug("[节点] " + node.getId() + " 执行响应回调...");
+                    }
+                    
+                    node.getResponseCallback().accept(msg);
+                    
+                    if (!isPongResponse && logger.isDebugEnabled()) {
+                        logger.debug("[节点] " + node.getId() + " 的响应回调执行完成");
+                    }
+                } catch (Exception e) {
+                    logger.error("执行响应回调时发生异常", e);
+                }
+            } else {
+                // 如果不是PONG响应才警告缺少回调，且仅在debug级别记录
+                if (!isPongResponse && logger.isDebugEnabled()) {
+                    logger.debug("[节点] " + node.getId() + " 没有设置响应回调");
+                }
+            }
+            
+            // 处理标准Redis命令响应
             if (msg instanceof RespArray) {
                 RespArray array = (RespArray) msg;
                 Resp response = processCommand(array);
@@ -390,7 +444,9 @@ public class ClusterNode {
                     ctx.writeAndFlush(response);
                 }
             } else {
-                ctx.writeAndFlush(new Errors("ERR unknown request type"));
+                if (!(msg instanceof SimpleString)) {
+                    ctx.writeAndFlush(new Errors("ERR unknown request type"));
+                }
             }
         }
         
