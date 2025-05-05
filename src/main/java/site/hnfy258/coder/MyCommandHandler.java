@@ -40,29 +40,7 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
         SILENT_COMMANDS.add("INFO");
     }
 
-    // 使用EnumSet提高查找效率
-    private static final Set<CommandType> WRITE_COMMANDS = EnumSet.of(
-            // 字符串操作
-            CommandType.SET, CommandType.MSET, CommandType.INCR,
-            
-            // 键管理
-            CommandType.DEL, CommandType.EXPIRE,
-            
-            // 哈希表操作
-            CommandType.HSET, CommandType.HMEST, CommandType.HDEL,
-            
-            // 列表操作
-            CommandType.LPUSH, CommandType.RPUSH, CommandType.LPOP, CommandType.RPOP, CommandType.LREM,
-            
-            // 集合操作
-            CommandType.SADD, CommandType.SREM, CommandType.SPOP,
-            
-            // 有序集合操作
-            CommandType.ZADD, CommandType.ZREM,
-            
-            // 数据库操作
-            CommandType.SELECT, CommandType.SAVE
-    );
+
 
     public MyCommandHandler(RedisCore core, AOFHandler aofHandler, RDBHandler rdbHandler, ReplicationHandler replicationHandler) {
         this.redisCore = core;
@@ -131,11 +109,15 @@ public class MyCommandHandler extends SimpleChannelInboundHandler<Resp> {
                 if (rdbHandler != null) {
                     rdbHandler.notifyDataChanged(redisCore.getCurrentDB().getId(), ((BulkString) array[1]).getContent());
                 }
-                
-                // 写命令处理：AOF记录
-                if (aofHandler != null) {
+
+            }
+            // 写命令处理：AOF记录
+            if (aofHandler != null) {
+                if(!commandType.equals(CommandType.BGREWRITEAOF)){
                     aofHandler.append(commandArray);
+                    logger.info(aofHandler.getWriter(),aofHandler.getProcessor);
                 }
+
             }
                 
             // 主从复制：复制所有命令（不仅限于写命令）

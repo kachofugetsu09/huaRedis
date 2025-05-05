@@ -20,7 +20,7 @@ public class AOFProcessor implements Processor {
     private static final Logger logger = Logger.getLogger(AOFProcessor.class);
 
     private final DoubleBufferBlockingQueue bufferQueue;    // 双缓冲队列
-    private final Writer writer;                            // 文件写入器
+    private  Writer writer;                            // 文件写入器
     private final AtomicBoolean running;                    // 运行状态标志
     private final AtomicLong appendedBytes = new AtomicLong(0);  // 统计已追加字节数
 
@@ -55,6 +55,9 @@ public class AOFProcessor implements Processor {
         try {
             batchLock.lock();
             try {
+                // 确保批处理缓冲区有效
+                ensureValidBatchBuffer();
+                
                 // 估计命令大小
                 int estimatedSize = estimateCommandSize(command);
 
@@ -66,14 +69,43 @@ public class AOFProcessor implements Processor {
 
                 // 如果批处理缓冲区剩余空间不足，先刷新
                 if (batchBuffer.writableBytes() < estimatedSize) {
+                    // 日志记录批处理缓冲区状态
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("批处理缓冲区空间不足: 需要 " + estimatedSize + " 字节, 剩余 " + 
+                                    batchBuffer.writableBytes() + " 字节, 当前已用 " + 
+                                    batchBuffer.readableBytes() + " 字节");
+                    }
                     flushBatch();
                 }
 
-                // 将命令写入批处理缓冲区
+                // 二次检查 - 如果刷新后仍然空间不足（可能是估计大小不准确）
+                if (batchBuffer.writableBytes() < estimatedSize) {
+                    logger.warn("刷新后缓冲区仍然空间不足，改用大命令处理方式");
+                    handleLargeCommand(command, estimatedSize);
+                    return;
+                }
+
+                // 写入前记录位置
                 int writerIndex = batchBuffer.writerIndex();
-                command.write(command, batchBuffer);
-                int bytesWritten = batchBuffer.writerIndex() - writerIndex;
-                appendedBytes.addAndGet(bytesWritten);
+                
+                // 尝试将命令写入批处理缓冲区
+                try {
+                    command.write(command, batchBuffer);
+                    int bytesWritten = batchBuffer.writerIndex() - writerIndex;
+                    appendedBytes.addAndGet(bytesWritten);
+                    
+                    // 安全检查 - 如果写入的字节数超过估计值的150%，记录警告
+                    if (bytesWritten > estimatedSize * 1.5) {
+                        logger.warn("命令实际大小 (" + bytesWritten + " 字节) 远大于估计大小 (" + 
+                                   estimatedSize + " 字节)，请检查估计算法");
+                    }
+                } catch (IndexOutOfBoundsException e) {
+                    // 处理写入失败 - 回滚写入位置并改用大命令处理
+                    batchBuffer.writerIndex(writerIndex);
+                    logger.error("写入批处理缓冲区失败，回滚并尝试大命令处理: " + e.getMessage());
+                    handleLargeCommand(command, Math.max(estimatedSize * 2, batchSize));
+                    return;
+                }
 
                 // 如果批处理缓冲区剩余空间不足10%，刷新
                 if (batchBuffer.writableBytes() < batchSize / 10) {
@@ -87,6 +119,19 @@ public class AOFProcessor implements Processor {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
             logger.error("AOFProcessor.append() error", e);
+        }
+    }
+
+    /**
+     * 确保批处理缓冲区有效
+     */
+    private void ensureValidBatchBuffer() {
+        if (batchBuffer == null || !batchBuffer.isWritable()) {
+            if (batchBuffer != null) {
+                logger.warn("发现无效的批处理缓冲区，释放并重新创建");
+                batchBuffer.release();
+            }
+            batchBuffer = Unpooled.directBuffer(batchSize);
         }
     }
 
@@ -109,10 +154,30 @@ public class AOFProcessor implements Processor {
 
 
     /**
-     * 估计命令大小，简化版本直接返回固定值
+     * 更准确地估计命令大小
      */
     private int estimateCommandSize(Resp command) {
-        return command == null ? 0 : 128;
+        if (command == null) {
+            return 0;
+        }
+        
+        // 使用临时缓冲区测量命令实际大小
+        ByteBuf tempBuf = Unpooled.buffer(256);
+        try {
+            command.write(command, tempBuf);
+            int actualSize = tempBuf.readableBytes();
+            
+            // 添加一定的安全余量(20%)
+            int estimatedSize = (int)(actualSize * 1.2);
+            
+            // 设置合理的最小和最大值
+            return Math.max(128, Math.min(estimatedSize, batchSize));
+        } catch (Exception e) {
+            logger.warn("估计命令大小时出错，返回默认大小", e);
+            return 1024; // 安全的默认值
+        } finally {
+            tempBuf.release();
+        }
     }
 
     /**
@@ -215,5 +280,11 @@ public class AOFProcessor implements Processor {
     public long getUnflushedSize() {
         return bufferQueue.getUnflushedSize();
     }
+
+
+    public void setWriter(Writer writer){
+        this.writer = writer;
+    }
+
 }
 

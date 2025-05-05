@@ -9,4 +9,6 @@ public interface Writer {
     void close();
 
     void force() throws IOException;
+
+    void start();
 }

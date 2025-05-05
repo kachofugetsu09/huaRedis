@@ -1,5 +1,6 @@
 package site.hnfy258.aof.processor;
 
+import site.hnfy258.aof.writer.Writer;
 import site.hnfy258.protocal.Resp;
 
 import java.io.IOException;
@@ -13,4 +14,7 @@ public interface Processor {
     void stop();
 
     boolean isRunning();
+
+    void setWriter(Writer writer);
+
 }

@@ -6,6 +6,10 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.apache.log4j.Logger;
 import site.hnfy258.RedisCore;
+import site.hnfy258.aof.AOFHandler;
+import site.hnfy258.aof.AOFSyncStrategy;
+import site.hnfy258.aof.writer.AOFWriter;
+import site.hnfy258.aof.writer.Writer;
 import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.datatype.RedisData;
 import site.hnfy258.protocal.BulkString;
@@ -38,13 +42,16 @@ public class AOFRewriter {
     //重写的buffer大小
     private final int bufferSize;
 
+    private final AOFHandler aofHanlder;
 
-    public AOFRewriter(RedisCore redisCore, String aofFilename, int bufferSize) {
+
+    public AOFRewriter(AOFHandler aofHandler,RedisCore redisCore, String aofFilename, int bufferSize) {
         this.redisCore = redisCore;
         this.aofFilename = aofFilename;
         this.tempFilename = aofFilename+".tmp";
         this.isRewriting = new AtomicBoolean(false);
         this.bufferSize = bufferSize;
+        this.aofHanlder = aofHandler;
     }
 
     public boolean canRewrite(){
@@ -60,28 +67,35 @@ public class AOFRewriter {
         }
 
         try{
-            rewriteBuffer = Collections.synchronizedList(new ArrayList<>());
-
-            redisCore.getRedisService().getAofHandler().startRewriteBuffer();
-
             File tempFile = new File(tempFilename);
             if(tempFile.exists()){
                 tempFile.delete();
             }
 
-
+            // 启动AOF重写缓冲区收集
+            redisCore.getRedisService().getAofHandler().startRewriteBuffer();
 
             boolean success = doWrite();
 
-
             if(success){
+                // 获取重写期间收集的所有命令
                 List<ByteBuffer> buffers = redisCore.getRedisService().getAofHandler().stopRewriteBufferAndGet();
 
                 // 将重写期间的命令追加到新AOF文件
                 appendRewriteBufferToTempFile(buffers);
 
-                // 原子性地替换文件
-                atomicReplaceFile(tempFile, new File(aofFilename));
+                // 在替换文件前暂停AOF写入操作
+                logger.info("暂停AOF写入操作以进行文件替换");
+                aofHanlder.stopChannel();
+
+                try {
+                    // 原子性地替换文件
+                    atomicReplaceFile(tempFile, new File(aofFilename));
+                } finally {
+                    // 无论替换是否成功，都恢复AOF写入操作
+                    logger.info("恢复AOF写入操作");
+                    aofHanlder.restartChannel();
+                }
             }else{
                 logger.error("重写失败");
                 tempFile.delete();
@@ -90,7 +104,7 @@ public class AOFRewriter {
             }
             return success;
         }catch(Exception e){
-            logger.error("Error during AOFRewriter", e);
+            logger.error("Error during AOF rewrite", e);
             redisCore.getRedisService().getAofHandler().discardRewriteBuffer();
             return false;
         }finally {
@@ -99,52 +113,79 @@ public class AOFRewriter {
     }
 
     private void atomicReplaceFile(File tempFile, File targetFile) throws IOException {
-        // 尝试直接重命名（在大多数系统上是原子操作）
-        if (tempFile.renameTo(targetFile)) {
-            return;
-        }
 
-        // 如果直接重命名失败，使用备份策略
-        File backupFile = new File(targetFile.getAbsolutePath() + ".bak");
 
-        // 删除已存在的备份文件
-        if (backupFile.exists()) {
-            if (!backupFile.delete()) {
-                logger.warn("无法删除备份文件: " + backupFile.getAbsolutePath());
+        try {
+            // 尝试直接重命名
+            if (tempFile.renameTo(targetFile)) {
+                logger.info("成功通过重命名替换文件: " + tempFile.getAbsolutePath() + " -> " + targetFile.getAbsolutePath());
+                
+                // 创建新的AOFWriter并更新processor
+                try {
+                    Writer newWriter = new AOFWriter(targetFile.getAbsolutePath(), redisCore.getRedisService().getAofHandler().getSyncStrategy());
+                    redisCore.getRedisService().getAofHandler().updateWriter(newWriter);
+                    logger.info("已成功更新AOF写入器");
+                } catch (IOException e) {
+                    logger.error("无法创建新的AOFWriter", e);
+                }
+                return;
             }
-        }
 
-        // 如果目标文件存在，先尝试删除它
-        if (targetFile.exists()) {
-            if (!targetFile.delete()) {
-                logger.warn("无法删除目标文件: " + targetFile.getAbsolutePath());
-                // 如果无法删除，尝试重命名为备份
-                if (!targetFile.renameTo(backupFile)) {
-                    logger.warn("无法创建备份文件，将使用复制方式替换");
-                    // 如果重命名也失败，则尝试使用REPLACE_EXISTING选项
-                    Files.copy(tempFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                    tempFile.delete();
-                    return;
+            // 如果直接重命名失败，使用备份策略
+            File backupFile = new File(targetFile.getAbsolutePath() + ".bak");
+
+            // 删除已存在的备份文件
+            if (backupFile.exists()) {
+                if (!backupFile.delete()) {
+                    logger.warn("无法删除备份文件: " + backupFile.getAbsolutePath());
                 }
             }
-        }
 
-        // 复制临时文件到目标位置
-        try {
-            Files.copy(tempFile.toPath(), targetFile.toPath());
-            tempFile.delete();
-        } catch (IOException e) {
-            logger.error("复制文件失败", e);
-            // 如果复制失败，尝试使用REPLACE_EXISTING选项
+            // 如果目标文件存在，先备份它
+            if (targetFile.exists()) {
+                if (!targetFile.renameTo(backupFile)) {
+                    logger.warn("无法将目标文件重命名为备份文件，将尝试直接替换");
+                } else {
+                    logger.info("已将目标文件备份为: " + backupFile.getAbsolutePath());
+                }
+            }
+
+            // 复制临时文件到目标位置
             Files.copy(tempFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            tempFile.delete();
-        }
-
-        // 操作成功后删除备份
-        if (backupFile.exists()) {
-            if (!backupFile.delete()) {
+            logger.info("文件已成功复制: " + tempFile.getAbsolutePath() + " -> " + targetFile.getAbsolutePath());
+            
+            // 删除临时文件
+            if (tempFile.exists() && !tempFile.delete()) {
+                logger.warn("无法删除临时文件: " + tempFile.getAbsolutePath());
+            }
+            
+            // 创建新的AOFWriter并更新processor
+            Writer newWriter = new AOFWriter(targetFile.getAbsolutePath(), redisCore.getRedisService().getAofHandler().getSyncStrategy());
+            redisCore.getRedisService().getAofHandler().updateWriter(newWriter);
+            logger.info("已成功更新AOF写入器");
+            
+            // 操作成功后删除备份
+            if (backupFile.exists() && !backupFile.delete()) {
                 logger.warn("无法删除备份文件: " + backupFile.getAbsolutePath());
             }
+        } catch (IOException e) {
+            logger.error("替换文件时发生错误", e);
+            
+            // 尝试恢复原始文件
+            File backupFile = new File(targetFile.getAbsolutePath() + ".bak");
+            if (backupFile.exists()) {
+                try {
+                    Files.copy(backupFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    logger.info("已从备份恢复原始文件");
+                    
+                    // 恢复时也需更新writer
+                    Writer newWriter = new AOFWriter(targetFile.getAbsolutePath(), redisCore.getRedisService().getAofHandler().getSyncStrategy());
+                    redisCore.getRedisService().getAofHandler().updateWriter(newWriter);
+                } catch (IOException ex) {
+                    logger.error("无法从备份恢复原始文件", ex);
+                }
+            }
+            throw e;
         }
     }
 
