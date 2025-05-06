@@ -294,7 +294,6 @@ public class Sentinel {
 
     /**
      * 添加要监控的Redis节点（支持同时监控主节点和从节点）
-     * @param clusterId 集群ID
      * @param masterNode 主节点
      * @param slaveNodes 从节点列表
      * @return 操作是否成功
@@ -758,253 +757,6 @@ public class Sentinel {
         }
     }
 
-    /**
-     * 处理来自其他Sentinel的客户端连接
-     */
-    static class SentinelClientHandler extends SimpleChannelInboundHandler<Resp> {
-        private final Logger logger = Logger.getLogger(SentinelClientHandler.class);
-        private final Sentinel sentinel;
-        private final String neighborId;
-
-        public SentinelClientHandler(Sentinel sentinel, String neighborId) {
-            this.sentinel = sentinel;
-            this.neighborId = neighborId;
-        }
-
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, Resp msg) {
-            if (msg instanceof RespArray) {
-                RespArray array = (RespArray) msg;
-                processCommand(ctx, array);
-                // 尝试处理可能的异步响应
-                processAsyncResponse(array);
-            } else if (msg instanceof SimpleString) {
-                // 处理简单字符串响应，如PONG
-                String content = ((SimpleString) msg).getContent();
-                if ("PONG".equalsIgnoreCase(content)) {
-                    // 收到PONG响应后更新最后回复时间
-                    sentinel.updateNodeLastReplyTime(neighborId);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("收到Sentinel " + neighborId + " 的PONG响应");
-                    }
-                }
-            }
-        }
-
-        private void processCommand(ChannelHandlerContext ctx, RespArray command) {
-            try {
-                Resp[] array = command.getArray();
-                if (array.length == 0) {
-                    return;
-                }
-
-                // 解析命令
-                String cmdName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
-
-                // 处理PING命令
-                if ("PING".equals(cmdName)) {
-                    ctx.writeAndFlush(new SimpleString("PONG"));
-                    sentinel.updateNodeLastReplyTime(neighborId);
-                }
-                // 处理IS-MASTER-DOWN-BY-ADDR命令
-                else if ("SENTINEL".equals(cmdName) && array.length >= 3 && 
-                        "IS-MASTER-DOWN-BY-ADDR".equals(((BulkString) array[1]).getContent().toUtf8String())) {
-                    String masterId = ((BulkString) array[2]).getContent().toUtf8String();
-                    boolean isDown = sentinel.subjectiveDownNodes.contains(masterId);
-                    
-                    // 检查是否有请求ID
-                    String requestId = null;
-                    if (array.length >= 4) {
-                        requestId = ((BulkString) array[3]).getContent().toUtf8String();
-                    }
-                    
-                    // 返回节点状态
-                    RespArray response;
-                    if (requestId != null) {
-                        response = new RespArray(new Resp[]{
-                                new BulkString(new BytesWrapper((isDown ? "1" : "0").getBytes(BytesWrapper.CHARSET))),
-                                new BulkString(new BytesWrapper(requestId.getBytes(BytesWrapper.CHARSET)))
-                        });
-                    } else {
-                        response = new RespArray(new Resp[]{
-                                new BulkString(new BytesWrapper((isDown ? "1" : "0").getBytes(BytesWrapper.CHARSET)))
-                        });
-                    }
-                    ctx.writeAndFlush(response);
-                }
-            } catch (Exception e) {
-                logger.error("处理来自邻居Sentinel的命令失败", e);
-            }
-        }
-
-        /**
-         * 处理异步响应，完成相应的CompletableFuture
-         */
-        private void processAsyncResponse(RespArray response) {
-            try {
-                Resp[] array = response.getArray();
-                if (array.length < 2) {
-                    return;  // 至少需要结果和请求ID
-                }
-                
-                // 尝试解析响应
-                if (array[0] instanceof BulkString && array[1] instanceof BulkString) {
-                    String resultValue = ((BulkString) array[0]).getContent().toUtf8String();
-                    String requestId = ((BulkString) array[1]).getContent().toUtf8String();
-                    
-                    // 查找并完成对应的Future
-                    CompletableFuture<Boolean> future = sentinel.pendingRequests.remove(requestId);
-                    if (future != null && !future.isDone()) {
-                        boolean isDown = "1".equals(resultValue);
-                        future.complete(isDown);
-                        if (logger.isDebugEnabled()) {
-                            logger.debug("收到异步IS-MASTER-DOWN-BY-ADDR响应, requestId=" + requestId + ", isDown=" + isDown);
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                logger.error("处理异步响应失败", e);
-            }
-        }
-
-        @Override
-        public void channelActive(ChannelHandlerContext ctx) {
-            logger.info("与邻居Sentinel建立连接: " + ctx.channel().remoteAddress());
-        }
-
-        @Override
-        public void channelInactive(ChannelHandlerContext ctx) {
-            logger.info("与邻居Sentinel连接断开: " + ctx.channel().remoteAddress());
-            sentinel.neighborChannels.remove(neighborId);
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            logger.error("与邻居Sentinel通信异常", cause);
-            ctx.close();
-        }
-    }
-
-    /**
-     * 处理接收到的连接请求
-     */
-    static class SentinelServerHandler extends SimpleChannelInboundHandler<Resp> {
-        private final Logger logger = Logger.getLogger(SentinelServerHandler.class);
-        private final Sentinel sentinel;
-        private String clientId = null;
-
-        public SentinelServerHandler(Sentinel sentinel) {
-            this.sentinel = sentinel;
-        }
-
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, Resp msg) {
-            if (msg instanceof RespArray) {
-                RespArray array = (RespArray) msg;
-                processCommand(ctx, array);
-            } else if (msg instanceof SimpleString) {
-                // 处理简单字符串响应，如PONG
-                String content = ((SimpleString) msg).getContent();
-                if ("PONG".equalsIgnoreCase(content) && clientId != null) {
-                    // 收到PONG响应后更新最后回复时间
-                    sentinel.updateNodeLastReplyTime(clientId);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("收到客户端 " + clientId + " 的PONG响应");
-                    }
-                }
-            }
-        }
-
-        private void processCommand(ChannelHandlerContext ctx, RespArray command) {
-            try {
-                Resp[] array = command.getArray();
-                if (array.length == 0) {
-                    return;
-                }
-
-                // 解析命令
-                String cmdName = ((BulkString) array[0]).getContent().toUtf8String().toUpperCase();
-
-                // 处理PING命令
-                if ("PING".equals(cmdName)) {
-                    ctx.writeAndFlush(new SimpleString("PONG"));
-                    if (clientId != null) {
-                        sentinel.updateNodeLastReplyTime(clientId);
-                    }
-                }
-                // 处理SENTINEL命令
-                else if ("SENTINEL".equals(cmdName)) {
-                    handleSentinelCommand(ctx, array);
-                }
-                // 处理其他命令...
-            } catch (Exception e) {
-                logger.error("处理命令失败", e);
-                ctx.writeAndFlush(new Errors("ERR " + e.getMessage()));
-            }
-        }
-
-        private void handleSentinelCommand(ChannelHandlerContext ctx, Resp[] array) {
-            if (array.length < 2) {
-                ctx.writeAndFlush(new Errors("ERR wrong number of arguments for 'sentinel' command"));
-                return;
-            }
-
-            String subCommand = ((BulkString) array[1]).getContent().toUtf8String().toUpperCase();
-
-            // 处理SENTINEL HELLO命令（注册节点）
-            if ("HELLO".equals(subCommand) && array.length >= 3) {
-                clientId = ((BulkString) array[2]).getContent().toUtf8String();
-                ctx.writeAndFlush(new SimpleString("OK"));
-                logger.info("客户端注册ID: " + clientId);
-            }
-            // 处理IS-MASTER-DOWN-BY-ADDR命令
-            else if ("IS-MASTER-DOWN-BY-ADDR".equals(subCommand) && array.length >= 3) {
-                String masterId = ((BulkString) array[2]).getContent().toUtf8String();
-                boolean isDown = sentinel.subjectiveDownNodes.contains(masterId);
-                
-                // 检查是否有请求ID
-                String requestId = null;
-                if (array.length >= 4) {
-                    requestId = ((BulkString) array[3]).getContent().toUtf8String();
-                }
-                
-                // 返回节点状态
-                RespArray response;
-                if (requestId != null) {
-                    response = new RespArray(new Resp[]{
-                            new BulkString(new BytesWrapper((isDown ? "1" : "0").getBytes(BytesWrapper.CHARSET))),
-                            new BulkString(new BytesWrapper(requestId.getBytes(BytesWrapper.CHARSET)))
-                    });
-                } else {
-                    response = new RespArray(new Resp[]{
-                            new BulkString(new BytesWrapper((isDown ? "1" : "0").getBytes(BytesWrapper.CHARSET)))
-                    });
-                }
-                ctx.writeAndFlush(response);
-            }
-            // 处理其他SENTINEL子命令...
-            else {
-                ctx.writeAndFlush(new Errors("ERR unknown sentinel subcommand '" + subCommand + "'"));
-            }
-        }
-
-        @Override
-        public void channelActive(ChannelHandlerContext ctx) {
-            logger.info("新连接建立: " + ctx.channel().remoteAddress());
-        }
-
-        @Override
-        public void channelInactive(ChannelHandlerContext ctx) {
-            logger.info("连接关闭: " + ctx.channel().remoteAddress());
-        }
-
-        @Override
-        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            logger.error("连接异常", cause);
-            ctx.close();
-        }
-    }
-
     // Getter和Setter方法
     public String getSentinelId() {
         return sentinelId;
@@ -1028,5 +780,32 @@ public class Sentinel {
 
     public Map<String, ClusterNode> getMonitoredNodes() {
         return monitoredNodes;
+    }
+
+    /**
+     * 检查主节点是否被主观判定为下线
+     * @param masterId 主节点ID
+     * @return 是否下线
+     */
+    public boolean isMasterSubjectivelyDown(String masterId) {
+        return subjectiveDownNodes.contains(masterId);
+    }
+    
+    /**
+     * 获取待处理的请求
+     * @param requestId 请求ID
+     * @return 与请求关联的Future
+     */
+    public CompletableFuture<Boolean> getPendingRequest(String requestId) {
+        CompletableFuture<Boolean> future = pendingRequests.remove(requestId);
+        return future;
+    }
+    
+    /**
+     * 移除邻居Sentinel的通道
+     * @param neighborId 邻居ID
+     */
+    public void removeNeighborChannel(String neighborId) {
+        neighborChannels.remove(neighborId);
     }
 }
