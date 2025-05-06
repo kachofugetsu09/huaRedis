@@ -1,22 +1,16 @@
 package site.hnfy258.sentinel;
 
-import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import org.apache.log4j.Logger;
-import site.hnfy258.RedisCore;
 import site.hnfy258.cluster.ClusterNode;
 import site.hnfy258.coder.MyDecoder;
 import site.hnfy258.coder.MyResponseEncoder;
-import site.hnfy258.command.impl.Ping;
-import site.hnfy258.datatype.BytesWrapper;
 import site.hnfy258.protocal.*;
 
-import java.net.InetSocketAddress;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -31,28 +25,19 @@ public class Sentinel {
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
     private Channel serverChannel;
-    private final Map<String, Channel> neighborChannels = new ConcurrentHashMap<>();
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
-    private Map<String, Sentinel> neighborSentinels;
-
-    private Map<String, ClusterNode> monitoredNodes;
-
-    private Set<String> subjectiveDownNodes;
-    private Set<String> objectiveDownNodes;
-
-    private Map<String, Map<String, Boolean>> sentinelOpinons;
-
-    // 存储异步请求的映射
-    private final Map<String, CompletableFuture<Boolean>> pendingRequests = new ConcurrentHashMap<>();
-
     private int quorum;
-
     private ScheduledExecutorService scheduledExecutor;
-
-    private Map<String, Long> lastReplyTime;
-
-
+    
+    // 节点管理器
+    private SentinelNodeManager nodeManager;
+    
+    // 邻居管理器
+    private SentinelNeighborManager neighborManager;
+    
+    // 投票统计
+    private Map<String, Map<String, Boolean>> sentinelOpinons = new ConcurrentHashMap<>();
 
     /**
      * Sentinel构造函数
@@ -67,14 +52,18 @@ public class Sentinel {
         this.port = port;
         this.quorum = quorum;
 
-        this.neighborSentinels = new ConcurrentHashMap<>();
-        this.monitoredNodes = new ConcurrentHashMap<>();
-        this.subjectiveDownNodes = ConcurrentHashMap.newKeySet();
-        this.objectiveDownNodes = ConcurrentHashMap.newKeySet();
-        this.sentinelOpinons = new ConcurrentHashMap<>();
-        this.lastReplyTime = new ConcurrentHashMap<>();
-
         this.scheduledExecutor = Executors.newScheduledThreadPool(4);
+        
+        // 初始化节点管理器
+        this.nodeManager = new SentinelNodeManager();
+        
+        // 初始化邻居管理器
+        this.neighborManager = new SentinelNeighborManager(
+            sentinelId, 
+            quorum, 
+            scheduledExecutor,
+            (sentinel, neighborId) -> new SentinelClientHandler(sentinel, neighborId)
+        );
     }
 
     /**
@@ -178,58 +167,9 @@ public class Sentinel {
      * @return 操作是否成功
      */
     public boolean monitorMaster(String masterId, String ip, int port) {
-        // 检查是否已经在监控列表中
-        if (monitoredNodes.containsKey(masterId)) {
-            ClusterNode existingNode = monitoredNodes.get(masterId);
-            // 如果连接断开，尝试重新连接
-            if (!existingNode.isActive()) {
-                logger.info("尝试重新连接到已存在的节点: " + masterId);
-                existingNode.connect();
-            }
-            
-            // 检查回调是否设置
-            if (existingNode.getResponseCallback() == null) {
-                logger.info("[DEBUG] 已存在节点 " + masterId + " 没有设置回调，重新设置回调");
-                existingNode.setResponseCallback((resp) -> {
-                    handleNodeResponse(masterId, resp);
-                });
-            } else {
-                logger.info("[DEBUG] 已存在节点 " + masterId + " 已设置回调");
-            }
-            
-            return true;
-        }
-        
-        try {
-            logger.info("Sentinel正在连接到节点: " + masterId + " (" + ip + ":" + port + ")");
-            
-            // 创建新的节点实例
-            ClusterNode masterNode = new ClusterNode(masterId, ip, port, true);
-            
-            // 设置节点响应回调
-            logger.info("[DEBUG] 为新节点 " + masterId + " 设置响应回调");
-            masterNode.setResponseCallback((resp) -> {
-                handleNodeResponse(masterId, resp);
-            });
-            
-            // 连接到主节点
-            CompletableFuture<Void> connectFuture = masterNode.connect();
-            connectFuture.get(5, TimeUnit.SECONDS);
-            
-            // 如果连接成功，添加到监控列表
-            if (masterNode.isActive()) {
-                monitoredNodes.put(masterId, masterNode);
-                lastReplyTime.put(masterId, System.currentTimeMillis());
-                logger.info("Sentinel成功连接到节点: " + masterId + "，初始化最后回复时间: " + lastReplyTime.get(masterId));
-                return true;
-            } else {
-                logger.error("无法连接到节点: " + masterId);
-                return false;
-            }
-        } catch (Exception e) {
-            logger.error("监控主节点失败: " + masterId, e);
-            return false;
-        }
+        return nodeManager.monitorMaster(masterId, ip, port, (resp) -> {
+            nodeManager.handleNodeResponse(masterId, resp);
+        });
     }
 
     /**
@@ -240,56 +180,9 @@ public class Sentinel {
      * @return 操作是否成功
      */
     public boolean monitorSlave(String slaveId, String ip, int port) {
-        // 检查是否已经在监控列表中
-        if (monitoredNodes.containsKey(slaveId)) {
-            ClusterNode existingNode = monitoredNodes.get(slaveId);
-            // 如果连接断开，尝试重新连接
-            if (!existingNode.isActive()) {
-                logger.info("尝试重新连接到已存在的从节点: " + slaveId);
-                existingNode.connect();
-            }
-            
-            // 检查回调是否设置
-            if (existingNode.getResponseCallback() == null) {
-                logger.info("已存在从节点 " + slaveId + " 没有设置回调，重新设置回调");
-                existingNode.setResponseCallback((resp) -> {
-                    handleNodeResponse(slaveId, resp);
-                });
-            }
-            
-            return true;
-        }
-        
-        try {
-            logger.info("Sentinel正在连接到从节点: " + slaveId + " (" + ip + ":" + port + ")");
-            
-            // 创建新的节点实例（标记为非主节点）
-            ClusterNode slaveNode = new ClusterNode(slaveId, ip, port, false);
-            
-            // 设置节点响应回调
-            logger.info("为新从节点 " + slaveId + " 设置响应回调");
-            slaveNode.setResponseCallback((resp) -> {
-                handleNodeResponse(slaveId, resp);
-            });
-            
-            // 连接到从节点
-            CompletableFuture<Void> connectFuture = slaveNode.connect();
-            connectFuture.get(5, TimeUnit.SECONDS);
-            
-            // 如果连接成功，添加到监控列表
-            if (slaveNode.isActive()) {
-                monitoredNodes.put(slaveId, slaveNode);
-                lastReplyTime.put(slaveId, System.currentTimeMillis());
-                logger.info("Sentinel成功连接到从节点: " + slaveId + "，初始化最后回复时间: " + lastReplyTime.get(slaveId));
-                return true;
-            } else {
-                logger.error("无法连接到从节点: " + slaveId);
-                return false;
-            }
-        } catch (Exception e) {
-            logger.error("监控从节点失败: " + slaveId, e);
-            return false;
-        }
+        return nodeManager.monitorSlave(slaveId, ip, port, (resp) -> {
+            nodeManager.handleNodeResponse(slaveId, resp);
+        });
     }
 
     /**
@@ -299,48 +192,10 @@ public class Sentinel {
      * @return 操作是否成功
      */
     public boolean monitorCluster(ClusterNode masterNode, List<ClusterNode> slaveNodes) {
-        boolean success = true;
-        
-        // 监控主节点
-        if (masterNode != null) {
-            success &= monitorMaster(masterNode.getId(), masterNode.getIp(), masterNode.getPort());
-            logger.info("监控主节点: " + masterNode.getId());
-        }
-        
-        // 监控所有从节点
-        if (slaveNodes != null) {
-            for (ClusterNode slave : slaveNodes) {
-                if (slave != null) {
-                    success &= monitorSlave(slave.getId(), slave.getIp(), slave.getPort());
-                    logger.info("监控从节点: " + slave.getId());
-                }
-            }
-        }
-        
-        return success;
-    }
-
-    private void handleNodeResponse(String nodeId, Resp resp) {
-        if (resp instanceof SimpleString) {
-            String content = ((SimpleString) resp).getContent();
-            if ("PONG".equalsIgnoreCase(content)) {
-                // 如果节点已经被标记为下线，但现在收到了PONG，需要重新评估其状态
-                boolean wasOffline = subjectiveDownNodes.contains(nodeId) || objectiveDownNodes.contains(nodeId);
-                
-                // 更新节点最后回复时间
-                updateNodeLastReplyTime(nodeId);
-                
-                // 如果之前被标记为下线状态，但现在收到了PONG，移除下线标记
-                if (wasOffline) {
-                    logger.info("曾被标记为下线的节点 " + nodeId + " 收到PONG响应，正在恢复其状态");
-                    subjectiveDownNodes.remove(nodeId);
-                    objectiveDownNodes.remove(nodeId);
-                    
-                    // 清理该节点的意见记录
-                    sentinelOpinons.remove(nodeId);
-                }
-            }
-        }
+        return nodeManager.monitorCluster(masterNode, slaveNodes, (resp) -> {
+            String nodeId = masterNode != null ? masterNode.getId() : "";
+            nodeManager.handleNodeResponse(nodeId, resp);
+        });
     }
 
     /**
@@ -351,232 +206,26 @@ public class Sentinel {
      * @return 操作是否成功
      */
     public boolean addSentinelNeighbor(String neighborId, String host, int port) {
-        // 如果已经在邻居列表中且连接活跃，直接返回成功
-        if (neighborSentinels.containsKey(neighborId)) {
-            // 检查连接是否活跃
-            Channel channel = neighborChannels.get(neighborId);
-            if (channel != null && channel.isActive()) {
-                logger.info("已存在活跃的Sentinel邻居连接: " + neighborId);
-                return true;
-            } else {
-                // 如果连接不活跃，尝试重新连接
-                logger.info("尝试重新连接到已存在的Sentinel邻居: " + neighborId);
-            }
-        } else {
-            // 创建邻居Sentinel实例（只保存元数据，不需要完整功能）
-            Sentinel neighbor = new Sentinel(neighborId, host, port, quorum);
-            neighborSentinels.put(neighborId, neighbor);
-        }
-        
-        // 连接到邻居Sentinel
-        try {
-            connectToSentinel(neighborId, host, port).get(5, TimeUnit.SECONDS);
-            
-            logger.info("成功连接到Sentinel节点: " + host + ":" + port);
-            return true;
-        } catch (Exception e) {
-            logger.error("添加Sentinel邻居失败: " + neighborId, e);
-            return false;
-        }
-    }
-
-    /**
-     * 连接到邻居Sentinel
-     * @param neighborId 邻居ID
-     * @param host 邻居主机
-     * @param port 邻居端口
-     * @return 连接Future
-     */
-    private CompletableFuture<Void> connectToSentinel(String neighborId, String host, int port) {
-        CompletableFuture<Void> future = new CompletableFuture<>();
-        
-        if (neighborChannels.containsKey(neighborId) && 
-            neighborChannels.get(neighborId).isActive()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        
-        // 使用Netty客户端连接到其他Sentinel
-        EventLoopGroup group = new NioEventLoopGroup();
-        Bootstrap bootstrap = new Bootstrap();
-        bootstrap.group(group)
-                .channel(NioSocketChannel.class)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-                .handler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel ch) {
-                        ChannelPipeline pipeline = ch.pipeline();
-                        pipeline.addLast(new MyDecoder());
-                        pipeline.addLast(new MyResponseEncoder());
-                        pipeline.addLast(new SentinelClientHandler(Sentinel.this, neighborId));
-                    }
-                });
-        
-        // 连接到邻居Sentinel
-        connectWithRetry(bootstrap, host, port, future, neighborId, 3, 1000);
-        
-        return future;
-    }
-
-    /**
-     * 带重试功能的连接方法
-     */
-    private void connectWithRetry(Bootstrap bootstrap, String host, int port,
-                                  CompletableFuture<Void> future, String neighborId,
-                                  int retries, long delayMs) {
-        bootstrap.connect(host, port).addListener((ChannelFutureListener) f -> {
-            if (f.isSuccess()) {
-                Channel channel = f.channel();
-                neighborChannels.put(neighborId, channel);
-                if (logger.isDebugEnabled()) {
-                    logger.debug("连接到其他Sentinel成功: " + host + "/" + channel.remoteAddress());
-                }
-                future.complete(null);
-            } else if (retries > 0) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("连接到Sentinel " + host + ":" + port + " 失败，剩余重试次数: " + retries);
-                }
-                f.channel().eventLoop().schedule(() ->
-                                connectWithRetry(bootstrap, host, port, future, neighborId, retries - 1, delayMs),
-                        delayMs, TimeUnit.MILLISECONDS);
-            } else {
-                if (logger.isDebugEnabled()) {
-                    logger.debug("连接到Sentinel失败，已达到最大重试次数", f.cause());
-                }
-                future.completeExceptionally(f.cause());
-            }
-        });
+        return neighborManager.addSentinelNeighbor(neighborId, host, port, this);
     }
 
     /**
      * 向所有连接发送PING命令
      */
     private void pingAllConnections() {
-        // PING命令
-        RespArray pingCommand = new RespArray(new Resp[]{
-                new BulkString(new BytesWrapper("PING".getBytes(BytesWrapper.CHARSET)))
-        });
-
-        // 只PING未下线的节点
-        for (Map.Entry<String, ClusterNode> entry : monitoredNodes.entrySet()) {
-            String nodeId = entry.getKey();
-            ClusterNode node = entry.getValue();
-            
-            // 跳过已经标记为下线的节点
-            if (subjectiveDownNodes.contains(nodeId) || objectiveDownNodes.contains(nodeId)) {
-                continue;
-            }
-            
-            if (node.isActive()) {
-                try {
-                    node.sendMessage(pingCommand);
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("已向节点 " + nodeId + " 发送PING");
-                    }
-                } catch (Exception e) {
-                    logger.error("PING节点失败: " + nodeId, e);
-                }
-            }
-        }
-
+        // PING所有Redis节点
+        nodeManager.pingAllNodes();
+        
         // PING所有邻居Sentinel
-        for (Map.Entry<String, Channel> entry : neighborChannels.entrySet()) {
-            Channel channel = entry.getValue();
-            if (channel.isActive()) {
-                try {
-                    channel.writeAndFlush(pingCommand);
-                    // 不在这里更新lastReplyTime，而是等待响应后更新
-                } catch (Exception e) {
-                    logger.error("PING Sentinel失败: " + entry.getKey(), e);
-                }
-            }
-        }
+        neighborManager.pingAllNeighbors();
     }
 
     /**
      * 检查主节点状态
      */
     private void checkMasterStatus() {
-        // 记录当前已确认的下线节点ID，避免多个节点同时下线
-        String currentDownNodeId = null;
-        boolean hasDetectedDownNode = false;
-
-        for (Map.Entry<String, ClusterNode> entry : monitoredNodes.entrySet()) {
-            String nodeId = entry.getKey();
-            ClusterNode node = entry.getValue();
-            
-            // 如果当前循环中已有节点被标记下线，其他节点暂时不处理，避免连锁反应
-            if (hasDetectedDownNode) {
-                continue;
-            }
-            
-            // 获取最后一次回复时间
-            Long lastReply = lastReplyTime.get(nodeId);
-            long currentTime = System.currentTimeMillis();
-            
-            // 只在关键节点状态变化时输出日志，减少日常检查的日志
-            boolean logDetails = false;
-            if (lastReply != null && (currentTime - lastReply) > 4000) {
-                // 接近超时时才记录日志
-                logDetails = true;
-            }
-            
-            if (logDetails) {
-                logger.debug("[检查] 节点 " + nodeId + " 状态: 最后回复时间=" + lastReply + ", 当前时间=" + currentTime + ", 差值=" + (currentTime - lastReply) + "ms");
-            }
-            
-            // 如果节点连接已断开，尝试重新连接
-            if (!node.isActive()) {
-                try {
-                    node.connect().get(1, TimeUnit.SECONDS);
-                    
-                    if (node.isActive()) {
-                        logger.info("成功重新连接到节点: " + nodeId);
-                        
-                        // 重新设置回调以防丢失
-                        if (node.getResponseCallback() == null) {
-                            node.setResponseCallback((resp) -> {
-                                handleNodeResponse(nodeId, resp);
-                            });
-                        }
-                        
-                        long newTime = System.currentTimeMillis();
-                        lastReplyTime.put(nodeId, newTime);
-                        
-                        if (subjectiveDownNodes.contains(nodeId)) {
-                            logger.info("节点 " + nodeId + " 恢复上线，从主观下线列表中移除");
-                            subjectiveDownNodes.remove(nodeId);
-                        }
-                        
-                        continue;
-                    }
-                } catch (Exception e) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("重新连接到节点失败: " + nodeId);
-                    }
-                }
-            }
-            
-            // 如果超过5秒没有回复，认为节点主观下线
-            if (lastReply == null || (currentTime - lastReply) > 5000) {
-                if (!subjectiveDownNodes.contains(nodeId)) {
-                    // 每次检测周期只处理一个节点的下线
-                    hasDetectedDownNode = true;
-                    currentDownNodeId = nodeId;
-                    
-                    // 将节点添加到主观下线列表
-                    subjectiveDownNodes.add(nodeId);
-                    // logger.info("节点 " + nodeId + " 已主观下线，最后回复时间=" + lastReply + ", 超时: " + (lastReply == null ? "null" : (currentTime - lastReply) + "ms"));
-                    
-                
-                }
-            } else {
-                // 如果节点回复正常
-                if (subjectiveDownNodes.contains(nodeId)) {
-                    logger.info("[DEBUG] 节点 " + nodeId + " 恢复正常，从主观下线列表中移除");
-                    subjectiveDownNodes.remove(nodeId);
-                }
-            }
-        }
+        // 使用节点管理器检查节点状态
+        nodeManager.checkNodeStatus();
     }
 
     /**
@@ -584,6 +233,7 @@ public class Sentinel {
      */
     private void exchangeSentinelInfo() {
         // 主观下线节点为空，无需交换信息
+        Set<String> subjectiveDownNodes = nodeManager.getSubjectiveDownNodes();
         if (subjectiveDownNodes.isEmpty()) {
             return;
         }
@@ -595,6 +245,9 @@ public class Sentinel {
         sentinelOpinons.get(nodeToProcess).put(sentinelId, true); // 本地sentinel认为节点下线
 
         // 遍历所有邻居sentinel询问节点状态
+        Map<String, Sentinel> neighborSentinels = neighborManager.getNeighborSentinels();
+        Map<String, Channel> neighborChannels = neighborManager.getNeighborChannels();
+        
         for (String neighborId : neighborSentinels.keySet()) {
             // 检查与邻居的连接是否活跃
             Channel channel = neighborChannels.get(neighborId);
@@ -603,8 +256,7 @@ public class Sentinel {
                 Sentinel neighbor = neighborSentinels.get(neighborId);
                 if (neighbor != null) {
                     try {
-                        connectToSentinel(neighborId, neighbor.getHost(), neighbor.getPort())
-                            .get(1, TimeUnit.SECONDS); // 短超时快速重连
+                        addSentinelNeighbor(neighborId, neighbor.getHost(), neighbor.getPort());
                         channel = neighborChannels.get(neighborId);
                     } catch (Exception e) {
                         logger.debug("重连邻居Sentinel失败: " + neighborId);
@@ -615,7 +267,7 @@ public class Sentinel {
             
             try {
                 // 使用异步方法询问邻居节点状态
-                CompletableFuture<Boolean> isDownFuture = askNeighborAboutNodeAsync(neighborId, nodeToProcess);
+                CompletableFuture<Boolean> isDownFuture = neighborManager.askNeighborAboutNodeAsync(neighborId, nodeToProcess);
                 
                 // 设置一个短暂的超时，避免阻塞主流程
                 try {
@@ -634,64 +286,14 @@ public class Sentinel {
         long downVotes = sentinelOpinons.get(nodeToProcess).values().stream().filter(isDown -> isDown).count();
 
         // 判断节点类型，区分处理主节点和从节点
-        ClusterNode node = monitoredNodes.get(nodeToProcess);
+        ClusterNode node = nodeManager.getMonitoredNodes().get(nodeToProcess);
         boolean isMasterNode = node != null && node.isMaster();
         
         if (downVotes >= quorum) {
-            if (!objectiveDownNodes.contains(nodeToProcess)) {
-                objectiveDownNodes.add(nodeToProcess);
-                if (isMasterNode) {
-                    logger.info("主节点 " + nodeToProcess + " 已确认客观下线");
-                    // 注意：这里只处理单个节点的下线，不影响其他节点
-                } else {
-                    logger.info("从节点 " + nodeToProcess + " 已确认客观下线");
-                    // 从节点下线处理，同样不影响其他节点
-                }
-            }
+            nodeManager.markNodeAsObjectiveDown(nodeToProcess);
         } else {
-            objectiveDownNodes.remove(nodeToProcess);
+            nodeManager.removeNodeFromObjectiveDown(nodeToProcess);
         }
-    }
-
-    /**
-     * 向邻居Sentinel询问节点状态
-     * @param neighborId 邻居Sentinel ID
-     * @param masterId 要询问的主节点ID
-     * @return 节点是否下线
-     */
-    private CompletableFuture<Boolean> askNeighborAboutNodeAsync(String neighborId, String masterId) {
-        CompletableFuture<Boolean> future = new CompletableFuture<>();
-        Channel channel = neighborChannels.get(neighborId);
-        if (channel == null || !channel.isActive()) {
-            future.complete(false);
-            return future;
-        }
-
-        // 生成唯一请求ID
-        String requestId = UUID.randomUUID().toString();
-
-        // 存储请求与Future的映射
-        pendingRequests.put(requestId, future);
-
-        // 创建带请求ID的命令
-        RespArray isDownCommand = new RespArray(new Resp[]{
-                new BulkString(new BytesWrapper("SENTINEL".getBytes(BytesWrapper.CHARSET))),
-                new BulkString(new BytesWrapper("IS-MASTER-DOWN-BY-ADDR".getBytes(BytesWrapper.CHARSET))),
-                new BulkString(new BytesWrapper(masterId.getBytes(BytesWrapper.CHARSET))),
-                new BulkString(new BytesWrapper(requestId.getBytes(BytesWrapper.CHARSET)))
-        });
-
-        channel.writeAndFlush(isDownCommand);
-
-        // 设置超时
-        scheduledExecutor.schedule(() -> {
-            if (!future.isDone()) {
-                future.complete(false);
-                pendingRequests.remove(requestId);
-            }
-        }, 2, TimeUnit.SECONDS);
-
-        return future;
     }
 
     /**
@@ -699,9 +301,13 @@ public class Sentinel {
      * @param nodeId 节点ID
      */
     public void updateNodeLastReplyTime(String nodeId) {
-        long currentTime = System.currentTimeMillis();
-        Long oldTime = lastReplyTime.get(nodeId);
-        lastReplyTime.put(nodeId, currentTime);
+        // 先检查是否是被监控的节点
+        if (nodeManager.getMonitoredNodes().containsKey(nodeId)) {
+            nodeManager.updateNodeLastReplyTime(nodeId);
+        } else {
+            // 否则尝试更新邻居Sentinel的回复时间
+            neighborManager.updateNeighborLastReplyTime(nodeId);
+        }
     }
 
     /**
@@ -715,26 +321,10 @@ public class Sentinel {
             scheduledExecutor.shutdown();
             
             // 断开与所有节点的连接
-            for (Map.Entry<String, ClusterNode> entry : monitoredNodes.entrySet()) {
-                try {
-                    entry.getValue().disconnect();
-                } catch (Exception e) {
-                    logger.error("断开节点连接失败: " + entry.getKey(), e);
-                }
-            }
+            nodeManager.disconnectAllNodes();
             
             // 关闭所有邻居Sentinel连接
-            for (Map.Entry<String, Channel> entry : neighborChannels.entrySet()) {
-                try {
-                    Channel channel = entry.getValue();
-                    if (channel != null && channel.isActive()) {
-                        channel.close().sync();
-                        logger.info("与其他Sentinel的连接关闭: " + channel.remoteAddress());
-                    }
-                } catch (Exception e) {
-                    logger.error("关闭Sentinel连接失败: " + entry.getKey(), e);
-                }
-            }
+            neighborManager.disconnectAllNeighbors();
             
             // 关闭服务器
             if (serverChannel != null) {
@@ -757,7 +347,7 @@ public class Sentinel {
         }
     }
 
-    // Getter和Setter方法
+    // Getter方法
     public String getSentinelId() {
         return sentinelId;
     }
@@ -771,41 +361,28 @@ public class Sentinel {
     }
 
     public Set<String> getSubjectiveDownNodes() {
-        return subjectiveDownNodes;
+        return nodeManager.getSubjectiveDownNodes();
     }
 
     public Set<String> getObjectiveDownNodes() {
-        return objectiveDownNodes;
+        return nodeManager.getObjectiveDownNodes();
     }
 
     public Map<String, ClusterNode> getMonitoredNodes() {
-        return monitoredNodes;
+        return nodeManager.getMonitoredNodes();
     }
 
     /**
-     * 检查主节点是否被主观判定为下线
-     * @param masterId 主节点ID
-     * @return 是否下线
+     * 获取节点管理器
      */
-    public boolean isMasterSubjectivelyDown(String masterId) {
-        return subjectiveDownNodes.contains(masterId);
+    public SentinelNodeManager getNodeManager() {
+        return nodeManager;
     }
-    
+
     /**
-     * 获取待处理的请求
-     * @param requestId 请求ID
-     * @return 与请求关联的Future
+     * 获取邻居管理器
      */
-    public CompletableFuture<Boolean> getPendingRequest(String requestId) {
-        CompletableFuture<Boolean> future = pendingRequests.remove(requestId);
-        return future;
-    }
-    
-    /**
-     * 移除邻居Sentinel的通道
-     * @param neighborId 邻居ID
-     */
-    public void removeNeighborChannel(String neighborId) {
-        neighborChannels.remove(neighborId);
+    public SentinelNeighborManager getNeighborManager() {
+        return neighborManager;
     }
 }

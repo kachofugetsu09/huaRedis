@@ -32,7 +32,7 @@ public class SentinelClientHandler extends SimpleChannelInboundHandler<Resp> {
             String content = ((SimpleString) msg).getContent();
             if ("PONG".equalsIgnoreCase(content)) {
                 // 收到PONG响应后更新最后回复时间
-                sentinel.updateNodeLastReplyTime(neighborId);
+                sentinel.getNeighborManager().updateNeighborLastReplyTime(neighborId);
                 if (logger.isDebugEnabled()) {
                     logger.debug("收到Sentinel " + neighborId + " 的PONG响应");
                 }
@@ -53,13 +53,13 @@ public class SentinelClientHandler extends SimpleChannelInboundHandler<Resp> {
             // 处理PING命令
             if ("PING".equals(cmdName)) {
                 ctx.writeAndFlush(new SimpleString("PONG"));
-                sentinel.updateNodeLastReplyTime(neighborId);
+                sentinel.getNeighborManager().updateNeighborLastReplyTime(neighborId);
             }
             // 处理IS-MASTER-DOWN-BY-ADDR命令
             else if ("SENTINEL".equals(cmdName) && array.length >= 3 && 
                     "IS-MASTER-DOWN-BY-ADDR".equals(((BulkString) array[1]).getContent().toUtf8String())) {
                 String masterId = ((BulkString) array[2]).getContent().toUtf8String();
-                boolean isDown = sentinel.isMasterSubjectivelyDown(masterId);
+                boolean isDown = sentinel.getNodeManager().isMasterSubjectivelyDown(masterId);
                 
                 // 检查是否有请求ID
                 String requestId = null;
@@ -102,7 +102,7 @@ public class SentinelClientHandler extends SimpleChannelInboundHandler<Resp> {
                 String requestId = ((BulkString) array[1]).getContent().toUtf8String();
                 
                 // 查找并完成对应的Future
-                CompletableFuture<Boolean> future = sentinel.getPendingRequest(requestId);
+                CompletableFuture<Boolean> future = sentinel.getNeighborManager().getPendingRequest(requestId);
                 if (future != null && !future.isDone()) {
                     boolean isDown = "1".equals(resultValue);
                     future.complete(isDown);
@@ -124,7 +124,7 @@ public class SentinelClientHandler extends SimpleChannelInboundHandler<Resp> {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         logger.info("与邻居Sentinel连接断开: " + ctx.channel().remoteAddress());
-        sentinel.removeNeighborChannel(neighborId);
+        sentinel.getNeighborManager().removeNeighborChannel(neighborId);
     }
 
     @Override

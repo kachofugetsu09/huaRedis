@@ -28,7 +28,12 @@ public class SentinelServerHandler extends SimpleChannelInboundHandler<Resp> {
             String content = ((SimpleString) msg).getContent();
             if ("PONG".equalsIgnoreCase(content) && clientId != null) {
                 // 收到PONG响应后更新最后回复时间
-                sentinel.updateNodeLastReplyTime(clientId);
+                if (sentinel.getNodeManager().getMonitoredNodes().containsKey(clientId)) {
+                    sentinel.getNodeManager().updateNodeLastReplyTime(clientId);
+                } else {
+                    sentinel.getNeighborManager().updateNeighborLastReplyTime(clientId);
+                }
+                
                 if (logger.isDebugEnabled()) {
                     logger.debug("收到客户端 " + clientId + " 的PONG响应");
                 }
@@ -50,7 +55,11 @@ public class SentinelServerHandler extends SimpleChannelInboundHandler<Resp> {
             if ("PING".equals(cmdName)) {
                 ctx.writeAndFlush(new SimpleString("PONG"));
                 if (clientId != null) {
-                    sentinel.updateNodeLastReplyTime(clientId);
+                    if (sentinel.getNodeManager().getMonitoredNodes().containsKey(clientId)) {
+                        sentinel.getNodeManager().updateNodeLastReplyTime(clientId);
+                    } else {
+                        sentinel.getNeighborManager().updateNeighborLastReplyTime(clientId);
+                    }
                 }
             }
             // 处理SENTINEL命令
@@ -81,7 +90,7 @@ public class SentinelServerHandler extends SimpleChannelInboundHandler<Resp> {
         // 处理IS-MASTER-DOWN-BY-ADDR命令
         else if ("IS-MASTER-DOWN-BY-ADDR".equals(subCommand) && array.length >= 3) {
             String masterId = ((BulkString) array[2]).getContent().toUtf8String();
-            boolean isDown = sentinel.getSubjectiveDownNodes().contains(masterId);
+            boolean isDown = sentinel.getNodeManager().isMasterSubjectivelyDown(masterId);
             
             // 检查是否有请求ID
             String requestId = null;
